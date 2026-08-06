@@ -69,16 +69,17 @@ class Semaphore {
     try { return await fn(); } finally { this.release(); }
   }
 }
-const scryfallGetLimiter = new Semaphore(5);
-// POST /cards/collection needs a CORS preflight; concurrent preflighted requests
-// are unreliable in some sandboxed/proxied browser environments (observed: two
-// simultaneous POSTs both fail with a network-level error even though a lone
-// POST or multiple concurrent GETs succeed) — serialize POSTs to be safe.
-const scryfallPostLimiter = new Semaphore(1);
+// POST /cards/collection needs a CORS preflight, and in some sandboxed/proxied
+// browser environments a preflighted request fails outright if ANY other
+// Scryfall request — GET or POST — is in flight at the same time (observed:
+// two concurrent POSTs both fail; a GET running alongside a POST also makes
+// the POST fail; a lone request of either kind, or multiple concurrent GETs
+// with no POST in the mix, all succeed). A single fully-serialized queue for
+// every Scryfall call, regardless of method, avoids that cross-talk entirely.
+const scryfallLimiter = new Semaphore(1);
 
 function fetchScryfallJson(url, opts) {
-  const limiter = (opts && opts.method === 'POST') ? scryfallPostLimiter : scryfallGetLimiter;
-  return limiter.run(() => fetchJson(url, opts));
+  return scryfallLimiter.run(() => fetchJson(url, opts));
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -653,6 +654,26 @@ let compareResultsData = [];
 let compareSortKey = 'name';
 let compareSortDir = 1;
 
+// Fraction of a set's real printings (unique:prints, tokens excluded by default
+// search behavior) that have at least one finish price on Scryfall.
+async function getSetPriceCoverage(setCode) {
+  let url = `${SCRYFALL_API}/cards/search?q=${encodeURIComponent('e:' + setCode)}&unique=prints`;
+  let total = 0;
+  let priced = 0;
+  let pages = 0;
+  while (url && pages < 8) {
+    const data = await fetchScryfallJson(url);
+    for (const card of data.data) {
+      total++;
+      const hasPrice = !!(card.prices && (card.prices.usd || card.prices.usd_foil || card.prices.usd_etched));
+      if (hasPrice) priced++;
+    }
+    url = data.has_more ? data.next_page : null;
+    pages++;
+  }
+  return { total, priced, fraction: total > 0 ? priced / total : 0 };
+}
+
 async function runCompare() {
   const codes = selectedCompareSetCodes();
   const summaryEl = document.getElementById('compareSummary');
@@ -674,15 +695,23 @@ async function runCompare() {
     try {
       const result = await computeBoosterEV(code);
       const ev = (result && result.ev) || {};
-      return { code, name, ev, error: Object.keys(ev).length === 0 ? 'No booster data' : null };
+      if (Object.keys(ev).length === 0) {
+        return { code, name, ev: {}, reason: 'no booster data' };
+      }
+      const coverage = await getSetPriceCoverage(code);
+      if (coverage.total === 0 || coverage.fraction < 0.5) {
+        const pct = Math.round(coverage.fraction * 100);
+        return { code, name, ev: {}, reason: coverage.total === 0 ? 'no priced cards found' : `only ${pct}% of cards have price data` };
+      }
+      return { code, name, ev, reason: null };
     } catch (e) {
-      return { code, name, ev: {}, error: e.message };
+      return { code, name, ev: {}, reason: e.message };
     }
   });
 
-  // Sets without booster data are dropped from the comparison entirely, not just
-  // hidden from the chart — also uncheck them so a later re-compare doesn't drag
-  // them along again.
+  // Sets dropped for either reason are removed from the comparison entirely, not
+  // just hidden from the chart — also uncheck them so a later re-compare doesn't
+  // drag them along again.
   const removed = allResults.filter(r => Object.keys(r.ev).length === 0);
   compareResultsData = allResults.filter(r => Object.keys(r.ev).length > 0);
   removed.forEach(r => {
@@ -690,8 +719,8 @@ async function runCompare() {
     if (cb) cb.checked = false;
   });
 
-  summaryEl.innerHTML = `${compareResultsData.length} of ${allResults.length} set(s) have booster data and are shown below.` +
-    (removed.length ? ` <span class="hint">Removed (no booster data): ${removed.map(s => escapeHtml(s.name)).join(', ')}.</span>` : '');
+  summaryEl.innerHTML = `${compareResultsData.length} of ${allResults.length} set(s) shown below.` +
+    (removed.length ? ` <span class="hint">Removed: ${removed.map(s => `${escapeHtml(s.name)} (${escapeHtml(s.reason)})`).join(', ')}.</span>` : '');
 
   compareSortKey = 'name';
   compareSortDir = 1;
