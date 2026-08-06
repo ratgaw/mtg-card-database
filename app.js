@@ -154,6 +154,8 @@ function expandPrintToRows(card) {
   const imageUriLarge = (card.image_uris && (card.image_uris.normal || card.image_uris.large)) ||
     (card.card_faces && card.card_faces[0] && card.card_faces[0].image_uris &&
       (card.card_faces[0].image_uris.normal || card.card_faces[0].image_uris.large)) || null;
+  const tcgplayerUri = (card.purchase_uris && card.purchase_uris.tcgplayer) || null;
+  const cardmarketUri = (card.purchase_uris && card.purchase_uris.cardmarket) || null;
 
   const rows = [];
   for (const finish of finishes) {
@@ -172,6 +174,8 @@ function expandPrintToRows(card) {
       allPrices,
       imageUri,
       imageUriLarge,
+      tcgplayerUri,
+      cardmarketUri,
     });
   }
   return rows;
@@ -536,6 +540,10 @@ async function openCardModal(row) {
     </div>
   `).join('') : '<p class="hint">No price data available.</p>';
 
+  const purchaseLinks = [];
+  if (row.tcgplayerUri) purchaseLinks.push(`<a href="${row.tcgplayerUri}" target="_blank" rel="noopener noreferrer">View / sell on TCGPlayer &rarr;</a>`);
+  if (row.cardmarketUri) purchaseLinks.push(`<a href="${row.cardmarketUri}" target="_blank" rel="noopener noreferrer">View / sell on Cardmarket &rarr;</a>`);
+
   body.innerHTML = `
     <div class="card-modal-layout">
       <div class="card-modal-image">
@@ -546,8 +554,10 @@ async function openCardModal(row) {
       <div class="card-modal-info">
         <h3>${escapeHtml(row.name)}</h3>
         <p class="hint">${escapeHtml(row.setName)} (${row.setCode.toUpperCase()}) &middot; #${escapeHtml(String(row.collectorNumber))} &middot; ${escapeHtml(row.rarity)}</p>
-        <h4>Pricing</h4>
+        <h4>Pricing <span class="hint">(market / buy price)</span></h4>
         ${priceRowsHtml}
+        ${purchaseLinks.length > 0 ? `<div class="purchase-links">${purchaseLinks.join('')}</div>` : ''}
+        <p class="hint">Scryfall only has market (buy) prices &mdash; use the link${purchaseLinks.length === 1 ? '' : 's'} above to see the current sell/buylist price on the vendor's own site.</p>
         <h4>Found in boosters</h4>
         <div id="cardModalBoosters"><p class="hint">Loading booster availability…</p></div>
       </div>

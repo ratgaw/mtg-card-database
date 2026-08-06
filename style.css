@@ -586,6 +586,22 @@ tbody tr:hover { outline: 1px solid var(--accent-dim); outline-offset: -1px; }
   letter-spacing: 0.03em;
 }
 
+.purchase-links {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0.6rem 0;
+}
+
+.purchase-links a {
+  color: var(--accent);
+  font-size: 0.85rem;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.purchase-links a:hover { text-decoration: underline; }
+
 @media (max-width: 800px) {
   main { flex-direction: column; }
   #filters { width: 100%; position: static; }
