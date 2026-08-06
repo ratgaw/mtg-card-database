@@ -222,6 +222,8 @@ tbody td {
 }
 
 tbody tr:nth-child(even) { background: var(--row-alt); }
+tbody tr { cursor: pointer; }
+tbody tr:hover { outline: 1px solid var(--accent-dim); outline-offset: -1px; }
 
 .finish-badge {
   display: inline-block;
@@ -331,6 +333,22 @@ tbody tr:nth-child(even) { background: var(--row-alt); }
 
 #resultsToolbar #resultsSummary { margin-bottom: 0; }
 
+.toolbar-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-shrink: 0;
+}
+
+#sortOrder {
+  padding: 0.3rem 0.5rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.8rem;
+}
+
 .view-toggle {
   display: flex;
   border: 1px solid var(--border);
@@ -365,7 +383,10 @@ tbody tr:nth-child(even) { background: var(--row-alt); }
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  cursor: pointer;
 }
+
+.card-tile:hover { outline: 1px solid var(--accent-dim); outline-offset: -1px; }
 
 .card-tile img {
   width: 100%;
@@ -528,10 +549,48 @@ tbody tr:nth-child(even) { background: var(--row-alt); }
 #compareTableWrap th { cursor: pointer; user-select: none; }
 #compareTableWrap th:hover { color: var(--accent); }
 
+/* ---------- card detail modal ---------- */
+.card-modal-content {
+  width: 680px;
+  max-width: 95vw;
+}
+
+.card-modal-layout {
+  display: flex;
+  gap: 1.2rem;
+  flex-wrap: wrap;
+}
+
+.card-modal-image {
+  flex: 0 0 220px;
+}
+
+.card-modal-image img {
+  width: 100%;
+  border-radius: 10px;
+  display: block;
+}
+
+.card-modal-info {
+  flex: 1;
+  min-width: 220px;
+}
+
+.card-modal-info h3 { margin: 0 0 0.2rem 0; }
+
+.card-modal-info h4 {
+  margin: 1rem 0 0.3rem 0;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
 @media (max-width: 800px) {
   main { flex-direction: column; }
   #filters { width: 100%; position: static; }
   #compareLayout { flex-direction: column; padding: 1rem; }
   #compareFilters { width: 100%; position: static; }
   .chart-bar-label { width: 80px; }
+  .card-modal-image { flex: 0 0 auto; max-width: 200px; margin: 0 auto; }
 }

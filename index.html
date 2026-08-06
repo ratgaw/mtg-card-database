@@ -38,6 +38,7 @@
       <div class="checkbox-row"><input type="checkbox" id="excludeEtched"><label for="excludeEtched">Etched</label></div>
       <div class="checkbox-row"><input type="checkbox" id="excludeAltArt"><label for="excludeAltArt">Alt art / showcase / borderless</label></div>
       <div class="checkbox-row"><input type="checkbox" id="excludeBase"><label for="excludeBase">Normal base card</label></div>
+      <div class="checkbox-row"><input type="checkbox" id="excludeNoPrice"><label for="excludeNoPrice">Cards with no price data</label></div>
     </div>
 
     <div class="filter-group">
@@ -57,9 +58,16 @@
   <section id="results-panel">
     <div id="resultsToolbar">
       <div id="resultsSummary"></div>
-      <div class="view-toggle" role="group" aria-label="Result view">
-        <button class="view-btn active" data-view="table">Table</button>
-        <button class="view-btn" data-view="grid">Grid</button>
+      <div class="toolbar-controls">
+        <select id="sortOrder">
+          <option value="none">Sort: none</option>
+          <option value="price-desc">Price: high to low</option>
+          <option value="price-asc">Price: low to high</option>
+        </select>
+        <div class="view-toggle" role="group" aria-label="Result view">
+          <button class="view-btn active" data-view="table">Table</button>
+          <button class="view-btn" data-view="grid">Grid</button>
+        </div>
       </div>
     </div>
     <div id="results"></div>
@@ -91,6 +99,13 @@
   <div class="modal-content">
     <button id="closeModal" class="close-btn">&times;</button>
     <div id="boosterModalBody">Loading&hellip;</div>
+  </div>
+</div>
+
+<div id="cardModal" class="modal hidden">
+  <div class="modal-content card-modal-content">
+    <button id="closeCardModal" class="close-btn">&times;</button>
+    <div id="cardModalBody">Loading&hellip;</div>
   </div>
 </div>
 

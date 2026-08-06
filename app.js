@@ -139,27 +139,39 @@ function classifyPrint(card) {
 function expandPrintToRows(card) {
   const { isAltArt } = classifyPrint(card);
   const finishes = card.finishes || [];
+
+  const allPrices = {};
+  for (const f of finishes) {
+    let p = null;
+    if (f === 'nonfoil') p = card.prices.usd;
+    else if (f === 'foil') p = card.prices.usd_foil;
+    else if (f === 'etched') p = card.prices.usd_etched;
+    if (p !== null && p !== undefined) allPrices[f] = parseFloat(p);
+  }
+
+  const imageUri = (card.image_uris && card.image_uris.small) ||
+    (card.card_faces && card.card_faces[0] && card.card_faces[0].image_uris && card.card_faces[0].image_uris.small) || null;
+  const imageUriLarge = (card.image_uris && (card.image_uris.normal || card.image_uris.large)) ||
+    (card.card_faces && card.card_faces[0] && card.card_faces[0].image_uris &&
+      (card.card_faces[0].image_uris.normal || card.card_faces[0].image_uris.large)) || null;
+
   const rows = [];
   for (const finish of finishes) {
-    let price = null;
-    if (finish === 'nonfoil') price = card.prices.usd;
-    else if (finish === 'foil') price = card.prices.usd_foil;
-    else if (finish === 'etched') price = card.prices.usd_etched;
     const isBase = finish === 'nonfoil' && !isAltArt && !card.promo && !card.variation;
     rows.push({
       id: card.id,
       name: card.name,
       setCode: card.set,
       setName: card.set_name,
-      setIcon: card.set_uri ? null : null,
       collectorNumber: card.collector_number,
       rarity: card.rarity,
       finish,
       isAltArt,
       isBase,
-      price: price === null || price === undefined ? null : parseFloat(price),
-      imageUri: (card.image_uris && card.image_uris.small) ||
-        (card.card_faces && card.card_faces[0] && card.card_faces[0].image_uris && card.card_faces[0].image_uris.small) || null,
+      price: allPrices[finish] !== undefined ? allPrices[finish] : null,
+      allPrices,
+      imageUri,
+      imageUriLarge,
     });
   }
   return rows;
@@ -170,6 +182,7 @@ function applyClientFilters(rows) {
   const excludeEtched = document.getElementById('excludeEtched').checked;
   const excludeAltArt = document.getElementById('excludeAltArt').checked;
   const excludeBase = document.getElementById('excludeBase').checked;
+  const excludeNoPrice = document.getElementById('excludeNoPrice').checked;
   const minPrice = parseFloat(document.getElementById('minPrice').value);
   const maxPrice = parseFloat(document.getElementById('maxPrice').value);
 
@@ -178,9 +191,22 @@ function applyClientFilters(rows) {
     if (excludeEtched && r.finish === 'etched') return false;
     if (excludeAltArt && r.isAltArt) return false;
     if (excludeBase && r.isBase) return false;
+    if (excludeNoPrice && r.price === null) return false;
     if (!isNaN(minPrice) && (r.price === null || r.price < minPrice)) return false;
     if (!isNaN(maxPrice) && (r.price === null || r.price > maxPrice)) return false;
     return true;
+  });
+}
+
+function applySort(rows) {
+  const sortOrder = document.getElementById('sortOrder').value;
+  if (sortOrder === 'none') return rows;
+  const dir = sortOrder === 'price-desc' ? -1 : 1;
+  return [...rows].sort((a, b) => {
+    if (a.price === null && b.price === null) return 0;
+    if (a.price === null) return 1;  // nulls always sort last, either direction
+    if (b.price === null) return -1;
+    return (a.price - b.price) * dir;
   });
 }
 
@@ -250,10 +276,17 @@ async function loadMore() {
 
 // ---------- rendering ----------
 let resultView = 'table';
+let rowLookup = new Map();
+
+function buildRowLookup(rows) {
+  rowLookup = new Map();
+  for (const r of rows) rowLookup.set(`${r.id}:${r.finish}`, r);
+}
 
 function renderResults() {
   const allRows = rawPrints.flatMap(expandPrintToRows);
-  currentRows = applyClientFilters(allRows);
+  currentRows = applySort(applyClientFilters(allRows));
+  buildRowLookup(currentRows);
 
   document.getElementById('resultsSummary').textContent =
     `${currentRows.length} row(s) across ${rawPrints.length} printing(s) loaded` +
@@ -316,7 +349,7 @@ function renderTable(rows) {
       </thead>
       <tbody>
         ${rows.map(r => `
-          <tr>
+          <tr data-rowkey="${r.id}:${r.finish}">
             <td>${escapeHtml(r.name)}</td>
             <td>${r.setCode.toUpperCase()}</td>
             <td>${r.collectorNumber}</td>
@@ -336,7 +369,7 @@ function renderGrid(rows) {
   return `
     <div class="card-grid">
       ${rows.map(r => `
-        <div class="card-tile">
+        <div class="card-tile" data-rowkey="${r.id}:${r.finish}">
           ${r.imageUri
             ? `<img src="${r.imageUri}" alt="${escapeHtml(r.name)}" loading="lazy">`
             : `<div class="card-tile-noart">${escapeHtml(r.name)}</div>`}
@@ -354,39 +387,44 @@ function renderGrid(rows) {
 }
 
 // ---------- booster EV ----------
-async function openBoosterModal(setCode, setName) {
-  const modal = document.getElementById('boosterModal');
-  const body = document.getElementById('boosterModalBody');
-  const heading = `${escapeHtml(setName)} (${setCode.toUpperCase()})`;
-  modal.classList.remove('hidden');
-  body.innerHTML = `<h3>${heading}</h3><p>Loading booster data…</p>`;
 
-  try {
-    const evResults = await computeBoosterEV(setCode);
-    if (!evResults || Object.keys(evResults).length === 0) {
-      body.innerHTML = `<h3>${heading}</h3><p>No booster data available for this set in MTGJSON.</p>`;
-      return;
-    }
-    const order = ['set', 'collector', 'draft', 'arena', 'collector-sample', 'prerelease'];
-    const kinds = Object.keys(evResults).sort((a, b) => order.indexOf(a) - order.indexOf(b));
-    body.innerHTML = `
-      <h3>${heading}</h3>
-      <p class="hint">Expected value = sum over each booster's weighted card sheets × current Scryfall price.</p>
-      ${kinds.map(k => `
-        <div class="ev-row">
-          <span>${labelForKind(k)}</span>
-          <span class="ev-value">${fmtMoney(evResults[k])}</span>
-        </div>
-      `).join('')}
-    `;
-  } catch (e) {
-    body.innerHTML = `<h3>${heading}</h3><p class="error-text">${escapeHtml(e.message)}</p>`;
-  }
+// MTGJSON per-set data is used by both the booster-EV modal and the per-card
+// "found in boosters" lookup — cache it (as a promise, so concurrent callers
+// share one in-flight fetch instead of duplicating it).
+const mtgjsonSetCache = new Map();
+function getMtgjsonSetData(setCode) {
+  const code = setCode.toUpperCase();
+  if (mtgjsonSetCache.has(code)) return mtgjsonSetCache.get(code);
+  const promise = fetchJson(`${MTGJSON_API}/${code}.json`)
+    .then(d => d.data)
+    .catch(e => { mtgjsonSetCache.delete(code); throw e; });
+  mtgjsonSetCache.set(code, promise);
+  return promise;
 }
+
+function buildUuidToScryfallId(setData) {
+  const map = new Map();
+  for (const c of setData.cards || []) {
+    if (c.identifiers && c.identifiers.scryfallId) map.set(c.uuid, c.identifiers.scryfallId);
+  }
+  for (const t of setData.tokens || []) {
+    if (t.identifiers && t.identifiers.scryfallId) map.set(t.uuid, t.identifiers.scryfallId);
+  }
+  return map;
+}
+
+// WotC renamed "Set Booster" (+ "Draft Booster") to "Play Booster" starting
+// with sets released in late 2024; MTGJSON reflects this as a `play` key
+// instead of `set`. Both share the same sheets/boosters/boostersTotalWeight
+// schema, so `play` is normalized to the `set` slot everywhere in this app
+// (comparison chart series, colors, sort order) — only the per-set modal and
+// the per-card "found in" list show the real product name from MTGJSON.
+const BOOSTER_KIND_ORDER = ['set', 'play', 'collector', 'draft', 'collector-sample', 'arena', 'prerelease'];
 
 function labelForKind(kind) {
   const labels = {
     set: 'Set Booster',
+    play: 'Play Booster',
     collector: 'Collector Booster',
     draft: 'Draft Booster',
     arena: 'Arena Booster',
@@ -396,25 +434,146 @@ function labelForKind(kind) {
   return labels[kind] || kind;
 }
 
+async function openBoosterModal(setCode, setName) {
+  const modal = document.getElementById('boosterModal');
+  const body = document.getElementById('boosterModalBody');
+  const heading = `${escapeHtml(setName)} (${setCode.toUpperCase()})`;
+  modal.classList.remove('hidden');
+  body.innerHTML = `<h3>${heading}</h3><p>Loading booster data…</p>`;
+
+  try {
+    const result = await computeBoosterEV(setCode);
+    if (!result || Object.keys(result.ev).length === 0) {
+      body.innerHTML = `<h3>${heading}</h3><p>No booster data available for this set in MTGJSON.</p>`;
+      return;
+    }
+    const order = ['set', 'collector', 'draft'];
+    const kinds = Object.keys(result.ev).sort((a, b) => order.indexOf(a) - order.indexOf(b));
+    body.innerHTML = `
+      <h3>${heading}</h3>
+      <p class="hint">Expected value = sum over each booster's weighted card sheets × current Scryfall price.</p>
+      ${kinds.map(k => `
+        <div class="ev-row">
+          <span>${escapeHtml(result.names[k] || labelForKind(k))}</span>
+          <span class="ev-value">${fmtMoney(result.ev[k])}</span>
+        </div>
+      `).join('')}
+    `;
+  } catch (e) {
+    body.innerHTML = `<h3>${heading}</h3><p class="error-text">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+// Returns { ev: {set, collector, draft} -> dollar EV, names: {set, collector, draft} -> real product name }
 async function computeBoosterEV(setCode) {
-  const mtgjson = await fetchJson(`${MTGJSON_API}/${setCode.toUpperCase()}.json`);
-  const setData = mtgjson.data;
+  const setData = await getMtgjsonSetData(setCode);
   const booster = setData.booster;
   if (!booster) return null;
 
-  const uuidToScryfallId = new Map();
-  for (const c of setData.cards || []) {
-    if (c.identifiers && c.identifiers.scryfallId) uuidToScryfallId.set(c.uuid, c.identifiers.scryfallId);
-  }
-  for (const t of setData.tokens || []) {
-    if (t.identifiers && t.identifiers.scryfallId) uuidToScryfallId.set(t.uuid, t.identifiers.scryfallId);
-  }
+  const uuidToScryfallId = buildUuidToScryfallId(setData);
 
-  const relevantKinds = ['set', 'collector', 'draft'].filter(k => booster[k]);
-  const evs = await Promise.all(relevantKinds.map(kind => evForBoosterKind(booster[kind], uuidToScryfallId)));
-  const results = {};
-  relevantKinds.forEach((kind, i) => { results[kind] = evs[i]; });
-  return results;
+  const kindForSlot = {};
+  if (booster.set) kindForSlot.set = 'set';
+  else if (booster.play) kindForSlot.set = 'play';
+  if (booster.collector) kindForSlot.collector = 'collector';
+  if (booster.draft) kindForSlot.draft = 'draft';
+
+  const slots = Object.keys(kindForSlot);
+  const evs = await Promise.all(slots.map(slot => evForBoosterKind(booster[kindForSlot[slot]], uuidToScryfallId)));
+  const ev = {};
+  const names = {};
+  slots.forEach((slot, i) => {
+    ev[slot] = evs[i];
+    names[slot] = booster[kindForSlot[slot]].name || labelForKind(kindForSlot[slot]);
+  });
+  return { ev, names };
+}
+
+// Which booster products (by their real MTGJSON product name) contain this specific print.
+async function getCardBoosterAvailability(setCode, scryfallId) {
+  const setData = await getMtgjsonSetData(setCode);
+  const booster = setData.booster;
+  if (!booster) return { found: false };
+
+  let uuid = null;
+  for (const c of setData.cards || []) {
+    if (c.identifiers && c.identifiers.scryfallId === scryfallId) { uuid = c.uuid; break; }
+  }
+  if (!uuid) {
+    for (const t of setData.tokens || []) {
+      if (t.identifiers && t.identifiers.scryfallId === scryfallId) { uuid = t.uuid; break; }
+    }
+  }
+  if (!uuid) return { found: false };
+
+  const availability = [];
+  const kinds = Object.keys(booster).sort((a, b) => BOOSTER_KIND_ORDER.indexOf(a) - BOOSTER_KIND_ORDER.indexOf(b));
+  for (const kind of kinds) {
+    const bd = booster[kind];
+    const sheetNames = [];
+    for (const sheetName in bd.sheets) {
+      if (uuid in bd.sheets[sheetName].cards) sheetNames.push(sheetName);
+    }
+    if (sheetNames.length > 0) {
+      availability.push({ kind, label: bd.name || labelForKind(kind), sheetNames });
+    }
+  }
+  return { found: true, availability };
+}
+
+// ---------- card detail modal ----------
+async function openCardModal(row) {
+  const modal = document.getElementById('cardModal');
+  const body = document.getElementById('cardModalBody');
+  modal.classList.remove('hidden');
+
+  const finishOrder = ['nonfoil', 'foil', 'etched'];
+  const finishKeys = Object.keys(row.allPrices).sort((a, b) => finishOrder.indexOf(a) - finishOrder.indexOf(b));
+  const priceRowsHtml = finishKeys.length > 0 ? finishKeys.map(finish => `
+    <div class="ev-row">
+      <span><span class="finish-badge ${finish}">${finish}</span>${finish === row.finish ? ' (this printing)' : ''}</span>
+      <span class="ev-value">${fmtMoney(row.allPrices[finish])}</span>
+    </div>
+  `).join('') : '<p class="hint">No price data available.</p>';
+
+  body.innerHTML = `
+    <div class="card-modal-layout">
+      <div class="card-modal-image">
+        ${row.imageUriLarge
+          ? `<img src="${row.imageUriLarge}" alt="${escapeHtml(row.name)}">`
+          : `<div class="card-tile-noart">${escapeHtml(row.name)}</div>`}
+      </div>
+      <div class="card-modal-info">
+        <h3>${escapeHtml(row.name)}</h3>
+        <p class="hint">${escapeHtml(row.setName)} (${row.setCode.toUpperCase()}) &middot; #${escapeHtml(String(row.collectorNumber))} &middot; ${escapeHtml(row.rarity)}</p>
+        <h4>Pricing</h4>
+        ${priceRowsHtml}
+        <h4>Found in boosters</h4>
+        <div id="cardModalBoosters"><p class="hint">Loading booster availability…</p></div>
+      </div>
+    </div>
+  `;
+
+  const boostersEl = document.getElementById('cardModalBoosters');
+  try {
+    const avail = await getCardBoosterAvailability(row.setCode, row.id);
+    if (!avail || !avail.found) {
+      boostersEl.innerHTML = '<p class="hint">No booster data available for this set in MTGJSON.</p>';
+      return;
+    }
+    if (avail.availability.length === 0) {
+      boostersEl.innerHTML = '<p class="hint">Not found in any published booster product for this set (may be a promo, prerelease-only, or other non-booster printing).</p>';
+      return;
+    }
+    boostersEl.innerHTML = avail.availability.map(a => `
+      <div class="ev-row">
+        <span>${escapeHtml(a.label)}</span>
+        <span class="hint">${a.sheetNames.map(escapeHtml).join(', ')}</span>
+      </div>
+    `).join('');
+  } catch (e) {
+    boostersEl.innerHTML = `<p class="error-text">${escapeHtml(e.message)}</p>`;
+  }
 }
 
 async function evForBoosterKind(bd, uuidToScryfallId) {
@@ -475,7 +634,7 @@ async function fetchPricesBatch(scryfallIds) {
 
 // ---------- compare sets by booster EV ----------
 const BOOSTER_SERIES = [
-  { key: 'set', label: 'Set Booster', varName: '--series-set' },
+  { key: 'set', label: 'Set / Play Booster', varName: '--series-set' },
   { key: 'collector', label: 'Collector Booster', varName: '--series-collector' },
   { key: 'draft', label: 'Draft Booster', varName: '--series-draft' },
 ];
@@ -503,8 +662,9 @@ async function runCompare() {
     const setMeta = allSets.find(s => s.code === code);
     const name = setMeta ? setMeta.name : code.toUpperCase();
     try {
-      const ev = await computeBoosterEV(code);
-      return { code, name, ev: ev || {}, error: (!ev || Object.keys(ev).length === 0) ? 'No booster data' : null };
+      const result = await computeBoosterEV(code);
+      const ev = (result && result.ev) || {};
+      return { code, name, ev, error: Object.keys(ev).length === 0 ? 'No booster data' : null };
     } catch (e) {
       return { code, name, ev: {}, error: e.message };
     }
@@ -623,10 +783,18 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('loadMoreBtn').addEventListener('click', loadMore);
   document.getElementById('setFilterBox').addEventListener('input', e => renderSetCheckboxList('setList', e.target.value, 'set-checkbox', 'set'));
   document.getElementById('groupBySet').addEventListener('change', () => { if (rawPrints.length) renderResults(); });
-  ['excludeFoil', 'excludeEtched', 'excludeAltArt', 'excludeBase', 'minPrice', 'maxPrice'].forEach(id => {
+  ['excludeFoil', 'excludeEtched', 'excludeAltArt', 'excludeBase', 'excludeNoPrice', 'minPrice', 'maxPrice'].forEach(id => {
     document.getElementById(id).addEventListener('input', () => { if (rawPrints.length) renderResults(); });
   });
+  document.getElementById('sortOrder').addEventListener('change', () => { if (rawPrints.length) renderResults(); });
   document.getElementById('nameQuery').addEventListener('keydown', e => { if (e.key === 'Enter') runSearch(); });
+
+  document.getElementById('results').addEventListener('click', e => {
+    const el = e.target.closest('[data-rowkey]');
+    if (!el) return;
+    const row = rowLookup.get(el.dataset.rowkey);
+    if (row) openCardModal(row);
+  });
 
   document.querySelectorAll('.view-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -653,5 +821,12 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   document.getElementById('boosterModal').addEventListener('click', e => {
     if (e.target.id === 'boosterModal') document.getElementById('boosterModal').classList.add('hidden');
+  });
+
+  document.getElementById('closeCardModal').addEventListener('click', () => {
+    document.getElementById('cardModal').classList.add('hidden');
+  });
+  document.getElementById('cardModal').addEventListener('click', e => {
+    if (e.target.id === 'cardModal') document.getElementById('cardModal').classList.add('hidden');
   });
 });
