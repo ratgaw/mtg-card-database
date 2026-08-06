@@ -668,7 +668,7 @@ async function runCompare() {
   chartEl.innerHTML = '';
   tableEl.innerHTML = '';
 
-  compareResultsData = await mapWithConcurrency(codes, 4, async (code) => {
+  const allResults = await mapWithConcurrency(codes, 4, async (code) => {
     const setMeta = allSets.find(s => s.code === code);
     const name = setMeta ? setMeta.name : code.toUpperCase();
     try {
@@ -680,20 +680,26 @@ async function runCompare() {
     }
   });
 
+  // Sets without booster data are dropped from the comparison entirely, not just
+  // hidden from the chart — also uncheck them so a later re-compare doesn't drag
+  // them along again.
+  const removed = allResults.filter(r => Object.keys(r.ev).length === 0);
+  compareResultsData = allResults.filter(r => Object.keys(r.ev).length > 0);
+  removed.forEach(r => {
+    const cb = document.querySelector(`.compare-set-checkbox[value="${r.code}"]`);
+    if (cb) cb.checked = false;
+  });
+
+  summaryEl.innerHTML = `${compareResultsData.length} of ${allResults.length} set(s) have booster data and are shown below.` +
+    (removed.length ? ` <span class="hint">Removed (no booster data): ${removed.map(s => escapeHtml(s.name)).join(', ')}.</span>` : '');
+
   compareSortKey = 'name';
   compareSortDir = 1;
   renderCompareResults();
 }
 
 function renderCompareResults() {
-  const valid = compareResultsData.filter(r => r.ev && Object.keys(r.ev).length > 0);
-  const skipped = compareResultsData.filter(r => !r.ev || Object.keys(r.ev).length === 0);
-
-  const summaryEl = document.getElementById('compareSummary');
-  summaryEl.innerHTML = `${valid.length} of ${compareResultsData.length} set(s) have booster data.` +
-    (skipped.length ? ` <span class="hint">Skipped: ${skipped.map(s => escapeHtml(s.name)).join(', ')}.</span>` : '');
-
-  const sorted = [...valid].sort((a, b) => {
+  const sorted = [...compareResultsData].sort((a, b) => {
     let av, bv;
     if (compareSortKey === 'name') {
       return a.name.localeCompare(b.name) * compareSortDir;
