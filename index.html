@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MTG Card Price Database</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>MTG Card Price Database</h1>
+  <p class="subtitle">Live prices via Scryfall (TCGPlayer / Cardmarket) &middot; Booster odds via MTGJSON</p>
+  <nav class="tabs">
+    <button class="tab-btn active" data-tab="browseView">Card Browser</button>
+    <button class="tab-btn" data-tab="compareView">Compare Booster Value</button>
+  </nav>
+</header>
+
+<main id="browseView" class="tab-panel">
+  <aside id="filters">
+    <div class="filter-group">
+      <label for="nameQuery">Card name / text</label>
+      <input type="text" id="nameQuery" placeholder="e.g. Lightning Bolt">
+    </div>
+
+    <div class="filter-group">
+      <label>Price range (USD)</label>
+      <div class="price-range">
+        <input type="number" id="minPrice" placeholder="Min" min="0" step="0.01">
+        <span>&ndash;</span>
+        <input type="number" id="maxPrice" placeholder="Max" min="0" step="0.01">
+      </div>
+    </div>
+
+    <div class="filter-group">
+      <label>Exclude</label>
+      <div class="checkbox-row"><input type="checkbox" id="excludeFoil"><label for="excludeFoil">Foil</label></div>
+      <div class="checkbox-row"><input type="checkbox" id="excludeEtched"><label for="excludeEtched">Etched</label></div>
+      <div class="checkbox-row"><input type="checkbox" id="excludeAltArt"><label for="excludeAltArt">Alt art / showcase / borderless</label></div>
+      <div class="checkbox-row"><input type="checkbox" id="excludeBase"><label for="excludeBase">Normal base card</label></div>
+    </div>
+
+    <div class="filter-group">
+      <div class="checkbox-row"><input type="checkbox" id="groupBySet"><label for="groupBySet">Group by set</label></div>
+    </div>
+
+    <div class="filter-group">
+      <label>Sets <span class="hint">(last 10 years, leave empty for all)</span></label>
+      <input type="text" id="setFilterBox" placeholder="Filter set list...">
+      <div id="setList" class="set-list">Loading sets&hellip;</div>
+    </div>
+
+    <button id="searchBtn">Search</button>
+    <p class="hint">Search requires a card name or at least one selected set.</p>
+  </aside>
+
+  <section id="results-panel">
+    <div id="resultsToolbar">
+      <div id="resultsSummary"></div>
+      <div class="view-toggle" role="group" aria-label="Result view">
+        <button class="view-btn active" data-view="table">Table</button>
+        <button class="view-btn" data-view="grid">Grid</button>
+      </div>
+    </div>
+    <div id="results"></div>
+    <button id="loadMoreBtn" class="hidden">Load more</button>
+  </section>
+</main>
+
+<section id="compareView" class="tab-panel hidden">
+  <div id="compareLayout">
+    <aside id="compareFilters">
+      <div class="filter-group">
+        <label>Sets to compare <span class="hint">(last 10 years)</span></label>
+        <input type="text" id="compareSetFilterBox" placeholder="Filter set list...">
+        <div id="compareSetList" class="set-list">Loading sets&hellip;</div>
+      </div>
+      <button id="compareBtn">Compare</button>
+      <p class="hint">Pick a few sets (booster data isn't published for every set/product).</p>
+    </aside>
+
+    <div id="compareResultsPanel">
+      <div id="compareSummary" class="hint">Select sets on the left and click Compare.</div>
+      <div id="compareChart"></div>
+      <div id="compareTableWrap"></div>
+    </div>
+  </div>
+</section>
+
+<div id="boosterModal" class="modal hidden">
+  <div class="modal-content">
+    <button id="closeModal" class="close-btn">&times;</button>
+    <div id="boosterModalBody">Loading&hellip;</div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
