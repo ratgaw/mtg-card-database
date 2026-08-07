@@ -48,6 +48,11 @@
     <div class="filter-group">
       <label>Sets <span class="hint">(last 10 years, leave empty for all)</span></label>
       <input type="text" id="setFilterBox" placeholder="Filter set list...">
+      <div class="set-list-actions">
+        <button type="button" class="link-btn" id="setListSelectAll">Select all</button>
+        <button type="button" class="link-btn" id="setListClear">Clear</button>
+        <span class="hint">or click-drag through the list</span>
+      </div>
       <div id="setList" class="set-list">Loading sets&hellip;</div>
     </div>
 
@@ -81,10 +86,15 @@
       <div class="filter-group">
         <label>Sets to compare <span class="hint">(last 10 years)</span></label>
         <input type="text" id="compareSetFilterBox" placeholder="Filter set list...">
+        <div class="set-list-actions">
+          <button type="button" class="link-btn" id="compareSetListSelectAll">Select all</button>
+          <button type="button" class="link-btn" id="compareSetListClear">Clear</button>
+          <span class="hint">or click-drag through the list</span>
+        </div>
         <div id="compareSetList" class="set-list">Loading sets&hellip;</div>
       </div>
       <button id="compareBtn">Compare</button>
-      <p class="hint">Pick a few sets (booster data isn't published for every set/product).</p>
+      <p class="hint">Pick a few sets (booster data isn't published for every set/product). Comparing many sets at once will take a while.</p>
     </aside>
 
     <div id="compareResultsPanel">

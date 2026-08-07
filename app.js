@@ -69,20 +69,39 @@ class Semaphore {
     try { return await fn(); } finally { this.release(); }
   }
 }
-// POST /cards/collection needs a CORS preflight, and in some sandboxed/proxied
-// browser environments a preflighted request fails outright if ANY other
-// Scryfall request — GET or POST — is in flight at the same time (observed:
-// two concurrent POSTs both fail; a GET running alongside a POST also makes
-// the POST fail; a lone request of either kind, or multiple concurrent GETs
-// with no POST in the mix, all succeed). A single fully-serialized queue for
-// every Scryfall call, regardless of method, avoids that cross-talk entirely.
-const scryfallLimiter = new Semaphore(1);
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-function fetchScryfallJson(url, opts) {
-  return scryfallLimiter.run(() => fetchJson(url, opts));
+// Retries a fetch on transient network errors (a dropped connection, a
+// momentary rate-limit, a proxy hiccup) instead of letting one blip
+// permanently kill whatever it was fetching for. Observed in practice: even
+// with no concurrency at all, a lone request to Scryfall can fail 2-3 times
+// in a row before succeeding — so this needs enough attempts and backoff to
+// ride out a real streak, not just a single retry. Matters more as a
+// comparison spans more sets/requests, since the odds of hitting at least
+// one streak like that rise with the total request count.
+async function fetchJsonWithRetry(url, opts, retries) {
+  let lastErr;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fetchJson(url, opts);
+    } catch (e) {
+      lastErr = e;
+      if (attempt < retries) await sleep(500 * (attempt + 1));
+    }
+  }
+  throw lastErr;
 }
 
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+// Modest concurrency caps (not a hard 1-at-a-time queue — normal concurrent
+// fetch/POST traffic is routine and well-supported by both browsers and
+// Scryfall) just to be a reasonable API citizen when a comparison fans out
+// across several sets at once, each pulling several booster kinds.
+const scryfallLimiter = new Semaphore(4);
+const mtgjsonLimiter = new Semaphore(4);
+
+function fetchScryfallJson(url, opts) {
+  return scryfallLimiter.run(() => fetchJsonWithRetry(url, opts, 5));
+}
 
 // ---------- set list ----------
 // "Fluff" set types that clutter the picker without being real card pools to
@@ -152,6 +171,46 @@ function selectedSetCodes() {
 
 function selectedCompareSetCodes() {
   return Array.from(document.querySelectorAll('.compare-set-checkbox:checked')).map(cb => cb.value);
+}
+
+// Click-drag multi-select across a set list: mousedown on an item flips it
+// and starts "painting" that same state onto every other item the mouse
+// passes over until mouseup, like a normal checkbox-list drag-select.
+let dragSelectState = null;
+
+function wireSetListDragSelect(containerId) {
+  const container = document.getElementById(containerId);
+  container.addEventListener('mousedown', e => {
+    const item = e.target.closest('.set-item');
+    if (!item) return;
+    e.preventDefault();
+    const cb = item.querySelector('input[type="checkbox"]');
+    if (!cb) return;
+    dragSelectState = !cb.checked;
+    cb.checked = dragSelectState;
+    document.body.classList.add('dragging-select');
+  });
+  container.addEventListener('mouseover', e => {
+    if (dragSelectState === null) return;
+    const item = e.target.closest('.set-item');
+    if (!item) return;
+    const cb = item.querySelector('input[type="checkbox"]');
+    if (cb) cb.checked = dragSelectState;
+  });
+}
+
+document.addEventListener('mouseup', () => {
+  dragSelectState = null;
+  document.body.classList.remove('dragging-select');
+});
+
+function wireSelectAllClear(selectAllBtnId, clearBtnId, containerId, checkboxClass) {
+  document.getElementById(selectAllBtnId).addEventListener('click', () => {
+    document.querySelectorAll(`#${containerId} .${checkboxClass}`).forEach(cb => { cb.checked = true; });
+  });
+  document.getElementById(clearBtnId).addEventListener('click', () => {
+    document.querySelectorAll(`#${containerId} .${checkboxClass}`).forEach(cb => { cb.checked = false; });
+  });
 }
 
 // ---------- row expansion + classification ----------
@@ -432,7 +491,7 @@ const mtgjsonSetCache = new Map();
 function getMtgjsonSetData(setCode) {
   const code = setCode.toUpperCase();
   if (mtgjsonSetCache.has(code)) return mtgjsonSetCache.get(code);
-  const promise = fetchJson(`${MTGJSON_API}/${code}.json`)
+  const promise = mtgjsonLimiter.run(() => fetchJsonWithRetry(`${MTGJSON_API}/${code}.json`, undefined, 5))
     .then(d => d.data)
     .catch(e => { mtgjsonSetCache.delete(code); throw e; });
   mtgjsonSetCache.set(code, promise);
@@ -502,29 +561,31 @@ async function openBoosterModal(setCode, setName) {
   }
 }
 
-// Returns { ev: {set, collector, draft} -> dollar EV, names: {set, collector, draft} -> real product name }
+// Returns { ev: {set, collector, draft} -> dollar EV, names: {...} -> real
+// product name, coverage: {total, priced, fraction} for this set's printings }
 async function computeBoosterEV(setCode) {
   const setData = await getMtgjsonSetData(setCode);
   const booster = setData.booster;
-  if (!booster) return null;
-
-  const uuidToScryfallId = buildUuidToScryfallId(setData);
+  if (!booster) return { ev: {}, names: {}, coverage: null };
 
   const kindForSlot = {};
   if (booster.set) kindForSlot.set = 'set';
   else if (booster.play) kindForSlot.set = 'play';
   if (booster.collector) kindForSlot.collector = 'collector';
   if (booster.draft) kindForSlot.draft = 'draft';
-
   const slots = Object.keys(kindForSlot);
-  const evs = await Promise.all(slots.map(slot => evForBoosterKind(booster[kindForSlot[slot]], uuidToScryfallId)));
+  if (slots.length === 0) return { ev: {}, names: {}, coverage: null };
+
+  const uuidToScryfallId = buildUuidToScryfallId(setData);
+  const { priceMap, coverage } = await getSetCardData(setCode);
+
   const ev = {};
   const names = {};
-  slots.forEach((slot, i) => {
-    ev[slot] = evs[i];
+  for (const slot of slots) {
+    ev[slot] = evForBoosterKind(booster[kindForSlot[slot]], uuidToScryfallId, priceMap);
     names[slot] = booster[kindForSlot[slot]].name || labelForKind(kindForSlot[slot]);
-  });
-  return { ev, names };
+  }
+  return { ev, names, coverage };
 }
 
 // Which booster products (by their real MTGJSON product name) contain this specific print.
@@ -620,17 +681,7 @@ async function openCardModal(row) {
   }
 }
 
-async function evForBoosterKind(bd, uuidToScryfallId) {
-  // gather every scryfallId referenced by this booster kind's sheets
-  const idSet = new Set();
-  for (const sheetName in bd.sheets) {
-    for (const uuid in bd.sheets[sheetName].cards) {
-      const sid = uuidToScryfallId.get(uuid);
-      if (sid) idSet.add(sid);
-    }
-  }
-  const priceMap = await fetchPricesBatch(Array.from(idSet));
-
+function evForBoosterKind(bd, uuidToScryfallId, priceMap) {
   const sheetEV = {};
   for (const sheetName in bd.sheets) {
     const sheet = bd.sheets[sheetName];
@@ -658,22 +709,34 @@ async function evForBoosterKind(bd, uuidToScryfallId) {
   return totalWeighted / bd.boostersTotalWeight;
 }
 
-async function fetchPricesBatch(scryfallIds) {
+// Fetches every printing in a set with one paginated GET sweep (unique:prints)
+// and returns both a scryfallId -> prices map (for booster EV lookups) and
+// price-coverage stats (for the >=50%-priced comparison gate) from that same
+// sweep. This intentionally avoids Scryfall's POST /cards/collection batch
+// endpoint: that endpoint requires a CORS preflight (a non-simple request),
+// and in testing a preflighted POST failed intermittently — including when
+// completely isolated with no concurrency at all — while plain GETs to the
+// same API were consistently reliable. Search results already carry full
+// price data per card, so a GET sweep gets the same data without ever
+// tripping that failure mode.
+async function getSetCardData(setCode) {
+  let url = `${SCRYFALL_API}/cards/search?q=${encodeURIComponent('e:' + setCode)}&unique=prints`;
   const priceMap = new Map();
-  const chunkSize = 75;
-  for (let i = 0; i < scryfallIds.length; i += chunkSize) {
-    const chunk = scryfallIds.slice(i, i + chunkSize);
-    if (i > 0) await sleep(100);
-    const data = await fetchScryfallJson(`${SCRYFALL_API}/cards/collection`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifiers: chunk.map(id => ({ id })) }),
-    });
+  let total = 0;
+  let priced = 0;
+  let pages = 0;
+  while (url && pages < 8) {
+    const data = await fetchScryfallJson(url);
     for (const card of data.data) {
+      total++;
       priceMap.set(card.id, card.prices);
+      const hasPrice = !!(card.prices && (card.prices.usd || card.prices.usd_foil || card.prices.usd_etched));
+      if (hasPrice) priced++;
     }
+    url = data.has_more ? data.next_page : null;
+    pages++;
   }
-  return priceMap;
+  return { priceMap, coverage: { total, priced, fraction: total > 0 ? priced / total : 0 } };
 }
 
 // ---------- compare sets by booster EV ----------
@@ -686,26 +749,6 @@ const BOOSTER_SERIES = [
 let compareResultsData = [];
 let compareSortKey = 'name';
 let compareSortDir = 1;
-
-// Fraction of a set's real printings (unique:prints, tokens excluded by default
-// search behavior) that have at least one finish price on Scryfall.
-async function getSetPriceCoverage(setCode) {
-  let url = `${SCRYFALL_API}/cards/search?q=${encodeURIComponent('e:' + setCode)}&unique=prints`;
-  let total = 0;
-  let priced = 0;
-  let pages = 0;
-  while (url && pages < 8) {
-    const data = await fetchScryfallJson(url);
-    for (const card of data.data) {
-      total++;
-      const hasPrice = !!(card.prices && (card.prices.usd || card.prices.usd_foil || card.prices.usd_etched));
-      if (hasPrice) priced++;
-    }
-    url = data.has_more ? data.next_page : null;
-    pages++;
-  }
-  return { total, priced, fraction: total > 0 ? priced / total : 0 };
-}
 
 async function runCompare() {
   const codes = selectedCompareSetCodes();
@@ -731,10 +774,10 @@ async function runCompare() {
       if (Object.keys(ev).length === 0) {
         return { code, name, ev: {}, reason: 'no booster data' };
       }
-      const coverage = await getSetPriceCoverage(code);
-      if (coverage.total === 0 || coverage.fraction < 0.5) {
-        const pct = Math.round(coverage.fraction * 100);
-        return { code, name, ev: {}, reason: coverage.total === 0 ? 'no priced cards found' : `only ${pct}% of cards have price data` };
+      const coverage = result.coverage;
+      if (!coverage || coverage.total === 0 || coverage.fraction < 0.5) {
+        const pct = coverage ? Math.round(coverage.fraction * 100) : 0;
+        return { code, name, ev: {}, reason: (!coverage || coverage.total === 0) ? 'no priced cards found' : `only ${pct}% of cards have price data` };
       }
       return { code, name, ev, reason: null };
     } catch (e) {
@@ -893,6 +936,11 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('compareBtn').addEventListener('click', runCompare);
   document.getElementById('compareSetFilterBox').addEventListener('input', e =>
     renderSetCheckboxList('compareSetList', e.target.value, 'compare-set-checkbox', 'cmp'));
+
+  wireSetListDragSelect('setList');
+  wireSetListDragSelect('compareSetList');
+  wireSelectAllClear('setListSelectAll', 'setListClear', 'setList', 'set-checkbox');
+  wireSelectAllClear('compareSetListSelectAll', 'compareSetListClear', 'compareSetList', 'compare-set-checkbox');
 
   document.getElementById('closeModal').addEventListener('click', () => {
     document.getElementById('boosterModal').classList.add('hidden');

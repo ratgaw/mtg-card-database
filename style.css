@@ -40,6 +40,8 @@ body {
   color: var(--text);
 }
 
+body.dragging-select { user-select: none; }
+
 header {
   padding: 1.25rem 1.5rem;
   border-bottom: 1px solid var(--border);
@@ -123,6 +125,26 @@ input[type="text"], input[type="number"] {
   margin: 0;
 }
 
+.set-list-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+}
+
+.link-btn:hover { text-decoration: underline; }
+
 .set-list {
   max-height: 220px;
   overflow-y: auto;
@@ -132,20 +154,29 @@ input[type="text"], input[type="number"] {
   padding: 0.4rem;
   background: var(--bg);
   font-size: 0.8rem;
+  user-select: none; /* avoid highlighting item text while drag-selecting */
 }
 
 .set-list .set-item {
   display: flex;
   align-items: center;
   gap: 0.4rem;
-  padding: 0.15rem 0;
+  padding: 0.15rem 0.2rem;
+  border-radius: 4px;
+  cursor: pointer;
 }
+
+.set-list .set-item:hover { background: var(--row-alt); }
 
 .set-list .set-item label {
   font-weight: 400;
   color: var(--text);
   margin: 0;
+  cursor: pointer;
+  pointer-events: none; /* clicks are handled on .set-item itself so drag-select works uniformly */
 }
+
+.set-list .set-item input[type="checkbox"] { pointer-events: none; }
 
 /* Scryfall set-symbol SVGs come with whatever fill was baked into the file;
    masking with a theme-ink background keeps them visible in both themes
