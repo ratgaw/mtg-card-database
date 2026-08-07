@@ -85,12 +85,27 @@ function fetchScryfallJson(url, opts) {
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // ---------- set list ----------
+// "Fluff" set types that clutter the picker without being real card pools to
+// browse: promo/token sets (they just mirror another set's cards), and
+// digital-only sets (Alchemy, etc. — set_type is 'alchemy' but `digital` is
+// the general flag that also catches other online-only categories). Sets
+// released_at in the future are teaser/spoiler-only listings with little to
+// no real price data yet, so those are excluded too (re-checked against
+// "today" each load, so a set simply falls into the list once it releases).
+const EXCLUDED_SET_TYPES = new Set(['promo', 'token']);
+
+function isFluffSet(s) {
+  return EXCLUDED_SET_TYPES.has(s.set_type) || s.digital === true;
+}
+
 async function loadSets() {
   const cutoff = cutoffDate();
+  const today = new Date().toISOString().slice(0, 10);
   try {
     const data = await fetchScryfallJson(`${SCRYFALL_API}/sets`);
     allSets = data.data
-      .filter(s => s.released_at && s.released_at >= cutoff)
+      .filter(s => s.released_at && s.released_at >= cutoff && s.released_at <= today)
+      .filter(s => !isFluffSet(s))
       .sort((a, b) => (b.released_at || '').localeCompare(a.released_at || ''));
     renderSetCheckboxList('setList', '', 'set-checkbox', 'set');
     renderSetCheckboxList('compareSetList', '', 'compare-set-checkbox', 'cmp');
@@ -98,6 +113,19 @@ async function loadSets() {
     document.getElementById('setList').textContent = 'Failed to load set list: ' + e.message;
     document.getElementById('compareSetList').textContent = 'Failed to load set list: ' + e.message;
   }
+}
+
+// A monochrome mask so the set symbol SVG (Scryfall's icons use whatever
+// fill was baked into the file) always renders in the current theme's ink
+// color instead of potentially being invisible (e.g. black-on-black in dark mode).
+function setIconHtml(iconUri, altText) {
+  if (!iconUri) return '';
+  const url = iconUri.replace(/'/g, '%27');
+  return `<span class="set-icon" style="-webkit-mask-image:url('${url}');mask-image:url('${url}');" title="${escapeHtml(altText || '')}"></span>`;
+}
+
+function getSetMeta(code) {
+  return allSets.find(s => s.code === code);
 }
 
 function renderSetCheckboxList(containerId, filterText, checkboxClass, idPrefix) {
@@ -113,7 +141,7 @@ function renderSetCheckboxList(containerId, filterText, checkboxClass, idPrefix)
   listEl.innerHTML = filtered.map(s => `
     <div class="set-item">
       <input type="checkbox" class="${checkboxClass}" value="${s.code}" id="${idPrefix}-${s.code}">
-      <label for="${idPrefix}-${s.code}">${escapeHtml(s.name)} <span class="hint">(${s.code.toUpperCase()}, ${s.released_at})</span></label>
+      <label for="${idPrefix}-${s.code}">${setIconHtml(s.icon_svg_uri, s.name)}${escapeHtml(s.name)} <span class="hint">(${s.code.toUpperCase()}, ${s.released_at})</span></label>
     </div>
   `).join('');
 }
@@ -219,7 +247,10 @@ function applySort(rows) {
 function buildQuery() {
   const name = document.getElementById('nameQuery').value.trim();
   const setCodes = selectedSetCodes();
-  const parts = [`date>=${cutoffDate()}`];
+  const today = new Date().toISOString().slice(0, 10);
+  // Keep results consistent with the (already-filtered) set picker: no
+  // promo/token reprints, no digital-only (Alchemy etc.), nothing unreleased.
+  const parts = [`date>=${cutoffDate()}`, `date<=${today}`, '-st:promo', '-st:token', '-is:digital'];
   if (name) parts.push(name);
   if (setCodes.length) parts.push('(' + setCodes.map(c => `e:${c}`).join(' or ') + ')');
   return parts.join(' ');
@@ -315,11 +346,12 @@ function renderResults() {
   container.innerHTML = sortedSetCodes.map(code => {
     const rows = groups.get(code);
     const setName = rows[0].setName;
+    const setMeta = getSetMeta(code);
     const avg = rows.reduce((s, r) => s + (r.price || 0), 0) / (rows.filter(r => r.price !== null).length || 1);
     return `
       <div class="set-group">
         <div class="set-group-header">
-          <span class="set-title">${escapeHtml(setName)} (${code.toUpperCase()})</span>
+          <span class="set-title">${setIconHtml(setMeta && setMeta.icon_svg_uri, setName)}${escapeHtml(setName)} (${code.toUpperCase()})</span>
           <span class="set-meta">${rows.length} rows &middot; avg ${fmtMoney(avg)}</span>
           <button class="booster-ev-btn" data-set="${code}" data-setname="${escapeHtml(setName)}">Booster EV</button>
         </div>
@@ -442,7 +474,8 @@ function labelForKind(kind) {
 async function openBoosterModal(setCode, setName) {
   const modal = document.getElementById('boosterModal');
   const body = document.getElementById('boosterModalBody');
-  const heading = `${escapeHtml(setName)} (${setCode.toUpperCase()})`;
+  const setMeta = getSetMeta(setCode);
+  const heading = `${setIconHtml(setMeta && setMeta.icon_svg_uri, setName)}${escapeHtml(setName)} (${setCode.toUpperCase()})`;
   modal.classList.remove('hidden');
   body.innerHTML = `<h3>${heading}</h3><p>Loading booster data…</p>`;
 
@@ -554,7 +587,7 @@ async function openCardModal(row) {
       </div>
       <div class="card-modal-info">
         <h3>${escapeHtml(row.name)}</h3>
-        <p class="hint">${escapeHtml(row.setName)} (${row.setCode.toUpperCase()}) &middot; #${escapeHtml(String(row.collectorNumber))} &middot; ${escapeHtml(row.rarity)}</p>
+        <p class="hint">${setIconHtml(getSetMeta(row.setCode) && getSetMeta(row.setCode).icon_svg_uri, row.setName)}${escapeHtml(row.setName)} (${row.setCode.toUpperCase()}) &middot; #${escapeHtml(String(row.collectorNumber))} &middot; ${escapeHtml(row.rarity)}</p>
         <h4>Pricing <span class="hint">(market / buy price)</span></h4>
         ${priceRowsHtml}
         ${purchaseLinks.length > 0 ? `<div class="purchase-links">${purchaseLinks.join('')}</div>` : ''}
@@ -759,7 +792,7 @@ function renderCompareChart(sorted) {
 
   const groups = sorted.map(r => `
     <div class="chart-group">
-      <div class="chart-group-title">${escapeHtml(r.name)} (${r.code.toUpperCase()})</div>
+      <div class="chart-group-title">${setIconHtml(getSetMeta(r.code) && getSetMeta(r.code).icon_svg_uri, r.name)}${escapeHtml(r.name)} (${r.code.toUpperCase()})</div>
       ${presentSeries.map(s => {
         const val = r.ev[s.key];
         if (val === undefined) return '';
@@ -801,7 +834,7 @@ function renderCompareTable(sorted) {
       <tbody>
         ${sorted.map(r => `
           <tr>
-            <td>${escapeHtml(r.name)} (${r.code.toUpperCase()})</td>
+            <td>${setIconHtml(getSetMeta(r.code) && getSetMeta(r.code).icon_svg_uri, r.name)}${escapeHtml(r.name)} (${r.code.toUpperCase()})</td>
             ${presentSeries.map(s => `<td class="price-cell">${r.ev[s.key] !== undefined ? fmtMoney(r.ev[s.key]) : '—'}</td>`).join('')}
             ${hasRatio ? `<td class="price-cell">${(r.ev.collector !== undefined && r.ev.set) ? (r.ev.collector / r.ev.set).toFixed(2) + '×' : '—'}</td>` : ''}
           </tr>

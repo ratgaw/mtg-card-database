@@ -147,6 +147,25 @@ input[type="text"], input[type="number"] {
   margin: 0;
 }
 
+/* Scryfall set-symbol SVGs come with whatever fill was baked into the file;
+   masking with a theme-ink background keeps them visible in both themes
+   instead of risking e.g. black-on-black in dark mode. */
+.set-icon {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  background-color: var(--text-dim);
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  vertical-align: middle;
+  margin-right: 0.3rem;
+  flex-shrink: 0;
+}
+
 
 #results-panel {
   flex: 1;
@@ -175,8 +194,6 @@ input[type="text"], input[type="number"] {
   cursor: pointer;
   background: var(--row-alt);
 }
-
-.set-group-header img { width: 20px; height: 20px; }
 
 .set-group-header .set-title {
   font-weight: 700;
