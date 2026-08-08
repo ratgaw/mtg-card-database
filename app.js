@@ -107,23 +107,36 @@ function fetchScryfallJson(url, opts) {
 // "Fluff" set types that clutter the picker without being real card pools to
 // browse: promo/token sets (they just mirror another set's cards), and
 // digital-only sets (Alchemy, etc. — set_type is 'alchemy' but `digital` is
-// the general flag that also catches other online-only categories). Sets
-// released_at in the future are teaser/spoiler-only listings with little to
-// no real price data yet, so those are excluded too (re-checked against
-// "today" each load, so a set simply falls into the list once it releases).
+// the general flag that also catches other online-only categories).
 const EXCLUDED_SET_TYPES = new Set(['promo', 'token']);
 
 function isFluffSet(s) {
   return EXCLUDED_SET_TYPES.has(s.set_type) || s.digital === true;
 }
 
+// Sets whose release is still genuinely far off are teaser/spoiler-only
+// listings with no real price data (e.g. a set released_at 3+ months out had
+// only ~13% of cards priced). But retail preorder pricing routinely populates
+// on TCGPlayer/Cardmarket a week or two *before* the official street date
+// (observed: a set 6 days from release already had 93% price coverage) — a
+// same-day cutoff would hide a set that's already perfectly usable. Allowing
+// a forward-looking window catches that normal preorder window without
+// pulling in sets that are still purely spoilers.
+const UPCOMING_RELEASE_WINDOW_DAYS = 21;
+
+function searchableUntilDate() {
+  const d = new Date();
+  d.setDate(d.getDate() + UPCOMING_RELEASE_WINDOW_DAYS);
+  return d.toISOString().slice(0, 10);
+}
+
 async function loadSets() {
   const cutoff = cutoffDate();
-  const today = new Date().toISOString().slice(0, 10);
+  const until = searchableUntilDate();
   try {
     const data = await fetchScryfallJson(`${SCRYFALL_API}/sets`);
     allSets = data.data
-      .filter(s => s.released_at && s.released_at >= cutoff && s.released_at <= today)
+      .filter(s => s.released_at && s.released_at >= cutoff && s.released_at <= until)
       .filter(s => !isFluffSet(s))
       .sort((a, b) => (b.released_at || '').localeCompare(a.released_at || ''));
     renderSetCheckboxList('setList', '', 'set-checkbox', 'set');
@@ -303,17 +316,36 @@ function applySort(rows) {
 }
 
 // ---------- search ----------
-function buildQuery() {
-  const name = document.getElementById('nameQuery').value.trim();
-  const setCodes = selectedSetCodes();
-  const today = new Date().toISOString().slice(0, 10);
+function chunkArray(arr, size) {
+  const chunks = [];
+  for (let i = 0; i < arr.length; i += size) chunks.push(arr.slice(i, i + size));
+  return chunks;
+}
+
+// A set-restriction clause with too many `e:code or e:code or ...` terms
+// makes the query long enough that Scryfall truncates it server-side before
+// parsing — the truncation lands mid-expression and comes back as "unclosed
+// parentheses" rather than a clean length error. 20 codes per clause keeps
+// every query comfortably short regardless of how many sets are selected
+// (e.g. via "Select all"); large selections just become several chunked
+// queries run back-to-back instead of one oversized one.
+const SET_QUERY_CHUNK_SIZE = 20;
+
+function buildQueryForSetChunk(name, setCodesChunk) {
   // Keep results consistent with the (already-filtered) set picker: no
-  // promo/token reprints, no digital-only (Alchemy etc.), nothing unreleased.
-  const parts = [`date>=${cutoffDate()}`, `date<=${today}`, '-st:promo', '-st:token', '-is:digital'];
+  // promo/token reprints, no digital-only (Alchemy etc.), nothing further out
+  // than the same near-term window the set picker itself allows.
+  const parts = [`date>=${cutoffDate()}`, `date<=${searchableUntilDate()}`, '-st:promo', '-st:token', '-is:digital'];
   if (name) parts.push(name);
-  if (setCodes.length) parts.push('(' + setCodes.map(c => `e:${c}`).join(' or ') + ')');
+  if (setCodesChunk && setCodesChunk.length) parts.push('(' + setCodesChunk.map(c => `e:${c}`).join(' or ') + ')');
   return parts.join(' ');
 }
+
+// Remaining chunk base-URLs still to search, once the currently active
+// chunk's own pages run out. fetchSearchPage pulls from this so "Load more"
+// and the auto-fetch loop continue seamlessly across chunk boundaries
+// without either of them needing to know chunking is happening at all.
+let pendingChunkUrls = [];
 
 async function runSearch() {
   const name = document.getElementById('nameQuery').value.trim();
@@ -331,11 +363,15 @@ async function runSearch() {
   document.getElementById('results').innerHTML = '';
   document.getElementById('resultsSummary').textContent = 'Searching…';
 
-  const query = buildQuery();
-  const url = `${SCRYFALL_API}/cards/search?q=${encodeURIComponent(query)}&unique=prints&order=set&dir=desc`;
+  const setChunks = setCodes.length > 0 ? chunkArray(setCodes, SET_QUERY_CHUNK_SIZE) : [null];
+  const chunkUrls = setChunks.map(chunk => {
+    const query = buildQueryForSetChunk(name, chunk);
+    return `${SCRYFALL_API}/cards/search?q=${encodeURIComponent(query)}&unique=prints&order=set&dir=desc`;
+  });
+  pendingChunkUrls = chunkUrls.slice(1);
 
   try {
-    await fetchSearchPage(url);
+    await fetchSearchPage(chunkUrls[0]);
     await autoFetchPages(2); // fetch first page + 2 more automatically
     renderResults();
   } catch (e) {
@@ -346,7 +382,13 @@ async function runSearch() {
 async function fetchSearchPage(url) {
   const data = await fetchScryfallJson(url);
   rawPrints = rawPrints.concat(data.data);
-  nextPageUrl = data.has_more ? data.next_page : null;
+  if (data.has_more) {
+    nextPageUrl = data.next_page;
+  } else if (pendingChunkUrls.length > 0) {
+    nextPageUrl = pendingChunkUrls.shift();
+  } else {
+    nextPageUrl = null;
+  }
 }
 
 async function autoFetchPages(maxAdditionalPages) {
