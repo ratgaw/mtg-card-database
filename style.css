@@ -756,7 +756,8 @@ tbody tr:hover { outline: 1px solid var(--accent-dim); outline-offset: -1px; }
 
 .search-result-row:last-child { border-bottom: none; }
 
-.sr-main { flex: 1; min-width: 0; }
+.sr-main { flex: 1; min-width: 0; cursor: pointer; border-radius: 4px; padding: 0.1rem 0.2rem; margin: -0.1rem -0.2rem; }
+.sr-main:hover { background: var(--row-alt); }
 
 .sr-name {
   font-weight: 600;

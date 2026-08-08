@@ -1184,13 +1184,14 @@ function renderCollectionSearchResults() {
   }
   resultsEl.innerHTML = collectionSearchRows.map((r, i) => `
     <div class="search-result-row">
-      <div class="sr-main">
+      <div class="sr-main" data-idx="${i}" title="Click for full details, art, and buy/sell links">
         <div class="sr-name">${escapeHtml(r.name)}</div>
         <div class="sr-meta">
           ${setIconHtml(getSetMeta(r.setCode) && getSetMeta(r.setCode).icon_svg_uri, r.setName)}${r.setCode.toUpperCase()} &middot; #${escapeHtml(String(r.collectorNumber))} &middot; ${escapeHtml(r.rarity)}
           <span class="finish-badge ${r.finish}">${r.finish}</span>
           ${treatmentBadgesHtml(r.treatments)}
         </div>
+        ${r.price === null ? '<div class="hint">No Scryfall price yet — click for TCGPlayer/Cardmarket links</div>' : ''}
       </div>
       <div class="sr-side">
         <span class="sr-price">${fmtMoney(r.price)}</span>
@@ -1200,6 +1201,9 @@ function renderCollectionSearchResults() {
   `).join('');
   resultsEl.querySelectorAll('.add-btn').forEach(btn => {
     btn.addEventListener('click', () => addCardToCollection(collectionSearchRows[Number(btn.dataset.idx)], 1));
+  });
+  resultsEl.querySelectorAll('.sr-main').forEach(el => {
+    el.addEventListener('click', () => openCardModal(collectionSearchRows[Number(el.dataset.idx)]));
   });
 }
 
