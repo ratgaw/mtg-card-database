@@ -44,7 +44,9 @@ async function fetchJson(url, opts) {
   if (!res.ok) {
     let detail = '';
     try { detail = (await res.json()).details || ''; } catch (e) {}
-    throw new Error(`Request failed (${res.status}): ${detail || url}`);
+    const err = new Error(`Request failed (${res.status}): ${detail || url}`);
+    err.status = res.status;
+    throw err;
   }
   return res.json();
 }
@@ -79,6 +81,12 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // ride out a real streak, not just a single retry. Matters more as a
 // comparison spans more sets/requests, since the odds of hitting at least
 // one streak like that rise with the total request count.
+//
+// Only retries genuinely transient failures: a true network-level error (the
+// request never got an HTTP response at all) or a server-side 429/5xx. A 4xx
+// like 404 "no card found" or 400 "bad query" is a deterministic answer —
+// retrying can't change it, so those fail immediately instead of wasting
+// several seconds and spamming retries for no benefit.
 async function fetchJsonWithRetry(url, opts, retries) {
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -86,7 +94,9 @@ async function fetchJsonWithRetry(url, opts, retries) {
       return await fetchJson(url, opts);
     } catch (e) {
       lastErr = e;
-      if (attempt < retries) await sleep(500 * (attempt + 1));
+      const isRetryable = e.status === undefined || e.status === 429 || e.status >= 500;
+      if (!isRetryable || attempt >= retries) throw e;
+      await sleep(500 * (attempt + 1));
     }
   }
   throw lastErr;
@@ -141,9 +151,11 @@ async function loadSets() {
       .sort((a, b) => (b.released_at || '').localeCompare(a.released_at || ''));
     renderSetCheckboxList('setList', '', 'set-checkbox', 'set');
     renderSetCheckboxList('compareSetList', '', 'compare-set-checkbox', 'cmp');
+    renderPackSetList('');
   } catch (e) {
     document.getElementById('setList').textContent = 'Failed to load set list: ' + e.message;
     document.getElementById('compareSetList').textContent = 'Failed to load set list: ' + e.message;
+    document.getElementById('packSetList').textContent = 'Failed to load set list: ' + e.message;
   }
 }
 
@@ -875,23 +887,35 @@ function renderCompareChart(sorted) {
     <div class="legend-item"><span class="legend-swatch" style="background:var(${s.varName})"></span>${s.label}</div>
   `).join('');
 
-  const groups = sorted.map(r => `
-    <div class="chart-group">
-      <div class="chart-group-title">${setIconHtml(getSetMeta(r.code) && getSetMeta(r.code).icon_svg_uri, r.name)}${escapeHtml(r.name)} (${r.code.toUpperCase()})</div>
-      ${presentSeries.map(s => {
-        const val = r.ev[s.key];
-        if (val === undefined) return '';
-        const pct = Math.max((val / maxVal) * 100, 1);
-        return `
-          <div class="chart-bar-row">
-            <div class="chart-bar-label">${s.label}</div>
-            <div class="chart-bar-track"><div class="chart-bar-fill" style="width:${pct}%; background:var(${s.varName})"></div></div>
-            <div class="chart-bar-value">${fmtMoney(val)}</div>
-          </div>
-        `;
-      }).join('')}
-    </div>
-  `).join('');
+  const groups = sorted.map(r => {
+    const logged = getLoggedPackAverages(r.code);
+    const loggedKeys = Object.keys(logged);
+    const loggedHtml = loggedKeys.length > 0
+      ? `<div class="logged-avg-note">${loggedKeys.map(k => {
+          const seriesLabel = (BOOSTER_SERIES.find(s => s.key === k) || {}).label || k;
+          const l = logged[k];
+          return `Your logged avg (${seriesLabel}): ${fmtMoney(l.avg)} — ${l.count} pack${l.count === 1 ? '' : 's'}`;
+        }).join(' &middot; ')}</div>`
+      : '';
+    return `
+      <div class="chart-group">
+        <div class="chart-group-title">${setIconHtml(getSetMeta(r.code) && getSetMeta(r.code).icon_svg_uri, r.name)}${escapeHtml(r.name)} (${r.code.toUpperCase()})</div>
+        ${loggedHtml}
+        ${presentSeries.map(s => {
+          const val = r.ev[s.key];
+          if (val === undefined) return '';
+          const pct = Math.max((val / maxVal) * 100, 1);
+          return `
+            <div class="chart-bar-row">
+              <div class="chart-bar-label">${s.label}</div>
+              <div class="chart-bar-track"><div class="chart-bar-fill" style="width:${pct}%; background:var(${s.varName})"></div></div>
+              <div class="chart-bar-value">${fmtMoney(val)}</div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `;
+  }).join('');
 
   chartEl.innerHTML = `<div class="chart-legend">${legend}</div>${groups}`;
 }
@@ -938,6 +962,455 @@ function renderCompareTable(sorted) {
   });
 }
 
+// ---------- my collection ----------
+// Everything here lives only in this browser's localStorage — there is no
+// backend, no account, and no cross-device sync. Export/import (JSON) is the
+// safety net against clearing site data or wanting to move to another device.
+const COLLECTION_STORAGE_KEY = 'mtgCollectionData.v1';
+
+function loadCollectionData() {
+  try {
+    const raw = localStorage.getItem(COLLECTION_STORAGE_KEY);
+    if (!raw) return { cards: [], packSessions: [] };
+    const parsed = JSON.parse(raw);
+    return {
+      cards: Array.isArray(parsed.cards) ? parsed.cards : [],
+      packSessions: Array.isArray(parsed.packSessions) ? parsed.packSessions : [],
+    };
+  } catch (e) {
+    return { cards: [], packSessions: [] };
+  }
+}
+
+let collectionData = loadCollectionData();
+
+function saveCollectionData() {
+  localStorage.setItem(COLLECTION_STORAGE_KEY, JSON.stringify(collectionData));
+}
+
+function genId(prefix) {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getActiveSession() {
+  return collectionData.packSessions.find(s => s.finishedAt === null) || null;
+}
+
+function addCardToCollection(row, quantity) {
+  const activeSession = getActiveSession();
+  const sessionId = activeSession ? activeSession.sessionId : null;
+  const existing = collectionData.cards.find(c =>
+    c.scryfallId === row.id && c.finish === row.finish && c.packSessionId === sessionId);
+  if (existing) {
+    existing.quantity += quantity;
+  } else {
+    collectionData.cards.push({
+      entryId: genId('card'),
+      scryfallId: row.id,
+      name: row.name,
+      setCode: row.setCode,
+      setName: row.setName,
+      collectorNumber: row.collectorNumber,
+      finish: row.finish,
+      rarity: row.rarity,
+      quantity,
+      addedAt: new Date().toISOString(),
+      packSessionId: sessionId,
+    });
+  }
+  saveCollectionData();
+  renderPackSessionPanel();
+  renderCollectionTab();
+}
+
+function removeCollectionEntry(entryId) {
+  collectionData.cards = collectionData.cards.filter(c => c.entryId !== entryId);
+  saveCollectionData();
+  renderPackSessionPanel();
+  renderCollectionTab();
+}
+
+function setCollectionEntryQuantity(entryId, quantity) {
+  if (quantity <= 0) { removeCollectionEntry(entryId); return; }
+  const entry = collectionData.cards.find(c => c.entryId === entryId);
+  if (!entry) return;
+  entry.quantity = quantity;
+  saveCollectionData();
+  renderPackSessionPanel();
+  renderCollectionTab();
+}
+
+// Per-set price data reused across collection re-renders within the same
+// page load (quantity tweaks etc. shouldn't each re-sweep every set fresh).
+const collectionPriceCache = new Map();
+function getSetCardDataCached(setCode) {
+  if (collectionPriceCache.has(setCode)) return collectionPriceCache.get(setCode);
+  const promise = getSetCardData(setCode).catch(e => { collectionPriceCache.delete(setCode); throw e; });
+  collectionPriceCache.set(setCode, promise);
+  return promise;
+}
+
+async function priceForCollectionCards(cards) {
+  const setCodes = [...new Set(cards.map(c => c.setCode))];
+  const priceMapsBySet = new Map();
+  await mapWithConcurrency(setCodes, 4, async (code) => {
+    try {
+      const { priceMap } = await getSetCardDataCached(code);
+      priceMapsBySet.set(code, priceMap);
+    } catch (e) {
+      priceMapsBySet.set(code, new Map());
+    }
+  });
+
+  let total = 0;
+  const priced = cards.map(c => {
+    const priceMap = priceMapsBySet.get(c.setCode);
+    const prices = priceMap ? priceMap.get(c.scryfallId) : null;
+    let unitPrice = null;
+    if (prices) {
+      if (c.finish === 'nonfoil' && prices.usd) unitPrice = parseFloat(prices.usd);
+      else if (c.finish === 'foil' && prices.usd_foil) unitPrice = parseFloat(prices.usd_foil);
+      else if (c.finish === 'etched' && prices.usd_etched) unitPrice = parseFloat(prices.usd_etched);
+    }
+    const lineTotal = unitPrice !== null ? unitPrice * c.quantity : null;
+    if (lineTotal !== null) total += lineTotal;
+    return Object.assign({}, c, { unitPrice, lineTotal });
+  });
+  return { total, priced };
+}
+
+// ---- search & add ----
+let collectionSearchRows = [];
+
+async function runCollectionSearch(nameQuery) {
+  const resultsEl = document.getElementById('collectionSearchResults');
+  if (!nameQuery || !nameQuery.trim()) { resultsEl.innerHTML = ''; return; }
+  resultsEl.innerHTML = '<p class="hint">Searching…</p>';
+  try {
+    const query = `${nameQuery.trim()} date<=${searchableUntilDate()}`;
+    // Sort by name (not release date): with noisy OCR-guessed text, the
+    // actually-correct card needs to be easy to spot in the confirmation
+    // list rather than buried among newer, unrelated broad-text matches.
+    const url = `${SCRYFALL_API}/cards/search?q=${encodeURIComponent(query)}&unique=prints&order=name&dir=asc`;
+    const data = await fetchScryfallJson(url);
+    collectionSearchRows = data.data.flatMap(expandPrintToRows).slice(0, 60);
+    renderCollectionSearchResults();
+  } catch (e) {
+    resultsEl.innerHTML = `<p class="error-text">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function renderCollectionSearchResults() {
+  const resultsEl = document.getElementById('collectionSearchResults');
+  if (collectionSearchRows.length === 0) {
+    resultsEl.innerHTML = '<p class="hint">No matches.</p>';
+    return;
+  }
+  resultsEl.innerHTML = collectionSearchRows.map((r, i) => `
+    <div class="search-result-row">
+      <span class="sr-name">${escapeHtml(r.name)} <span class="hint">${r.setCode.toUpperCase()} &middot; ${r.finish}</span></span>
+      <span class="sr-price">${fmtMoney(r.price)}</span>
+      <button class="add-btn" data-idx="${i}">+ Add</button>
+    </div>
+  `).join('');
+  resultsEl.querySelectorAll('.add-btn').forEach(btn => {
+    btn.addEventListener('click', () => addCardToCollection(collectionSearchRows[Number(btn.dataset.idx)], 1));
+  });
+}
+
+// ---- camera / photo OCR scan ----
+let tesseractLoadPromise = null;
+function loadTesseract() {
+  if (window.Tesseract) return Promise.resolve();
+  if (tesseractLoadPromise) return tesseractLoadPromise;
+  tesseractLoadPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.0.4/dist/tesseract.min.js';
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error('Could not load the OCR library (offline, or blocked by an extension/network policy).'));
+    document.head.appendChild(script);
+  });
+  return tesseractLoadPromise;
+}
+
+// MTG card names sit in a title bar near the top of the card, so among
+// recognized text lines, the topmost reasonably-alphabetic one is the best
+// guess at the name — full-card OCR also reads rules text, flavor text, set
+// codes, etc., which this simple heuristic mostly filters out by position.
+function bestGuessCardName(ocrData) {
+  let candidates = [];
+  if (ocrData.lines && ocrData.lines.length) {
+    candidates = ocrData.lines.map(l => ({ text: l.text || '', y: (l.bbox && l.bbox.y0) || 0 }));
+  } else if (ocrData.text) {
+    candidates = ocrData.text.split('\n').map((t, i) => ({ text: t, y: i }));
+  }
+  candidates = candidates
+    .map(c => ({ text: c.text.trim(), y: c.y }))
+    .filter(c => c.text.length >= 3 && /[a-zA-Z]{3,}/.test(c.text));
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => a.y - b.y);
+  const cleaned = candidates[0].text.replace(/[^\w\s',\-]/g, '').trim();
+  // Real card names are rarely more than a few words; a longer OCR line
+  // likely ran on into adjacent text (mana cost, type line), so cap it —
+  // better to search a shorter, cleaner guess than a noisy long one.
+  return cleaned.split(/\s+/).slice(0, 5).join(' ');
+}
+
+async function handleScanFile(file) {
+  const statusEl = document.getElementById('scanStatus');
+  if (!file) return;
+  statusEl.textContent = 'Loading OCR engine…';
+  try {
+    await loadTesseract();
+    statusEl.textContent = 'Reading card text… (a few seconds)';
+    const { data } = await Tesseract.recognize(file, 'eng');
+    const guess = bestGuessCardName(data);
+    if (!guess) {
+      statusEl.innerHTML = '<span class="error-text">Could not read the card name confidently — try searching manually below.</span>';
+      return;
+    }
+    // OCR text is noisy enough that a plain search (which AND-matches every
+    // word) often returns nothing. Scryfall's fuzzy-name lookup is built for
+    // exactly this — closest real card to an imperfect string — so resolve
+    // through that first, then search for every printing of the real name.
+    statusEl.textContent = `Detected "${guess}" — looking up the closest match…`;
+    let resolvedName = guess;
+    try {
+      const card = await fetchScryfallJson(`${SCRYFALL_API}/cards/named?fuzzy=${encodeURIComponent(guess)}`);
+      resolvedName = card.name;
+    } catch (e) {
+      // no confident fuzzy match — fall back to searching the raw OCR guess
+    }
+    statusEl.innerHTML = `Detected: <strong>${escapeHtml(resolvedName)}</strong> &mdash; pick the exact printing below to confirm.`;
+    document.getElementById('collectionSearchBox').value = resolvedName;
+    await runCollectionSearch(resolvedName);
+  } catch (e) {
+    statusEl.innerHTML = `<span class="error-text">${escapeHtml(e.message)}</span>`;
+  }
+}
+
+// ---- log a pack ----
+function renderPackSetList(filterText) {
+  const listEl = document.getElementById('packSetList');
+  const ft = (filterText || '').trim().toLowerCase();
+  const filtered = allSets.filter(s => !ft || s.name.toLowerCase().includes(ft) || s.code.toLowerCase().includes(ft));
+  if (filtered.length === 0) { listEl.textContent = 'No sets match.'; return; }
+  listEl.innerHTML = filtered.map(s => `
+    <div class="set-item">
+      <input type="radio" name="packSetRadio" class="pack-set-radio" value="${s.code}" id="packset-${s.code}">
+      <label for="packset-${s.code}">${setIconHtml(s.icon_svg_uri, s.name)}${escapeHtml(s.name)} <span class="hint">(${s.code.toUpperCase()})</span></label>
+    </div>
+  `).join('');
+}
+
+function startPackSession() {
+  const checked = document.querySelector('.pack-set-radio:checked');
+  if (!checked) { alert('Pick a set first.'); return; }
+  const setCode = checked.value;
+  const boosterKind = document.getElementById('packBoosterKindSelect').value;
+  const setMeta = getSetMeta(setCode);
+  const label = (BOOSTER_SERIES.find(s => s.key === boosterKind) || {}).label || boosterKind;
+  collectionData.packSessions.push({
+    sessionId: genId('pack'),
+    setCode,
+    setName: setMeta ? setMeta.name : setCode.toUpperCase(),
+    boosterKind,
+    boosterLabel: label,
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    totalValue: null,
+  });
+  saveCollectionData();
+  renderPackSessionPanel();
+}
+
+async function finishActiveSession() {
+  const session = getActiveSession();
+  if (!session) return;
+  const cardsInSession = collectionData.cards.filter(c => c.packSessionId === session.sessionId);
+  if (cardsInSession.length === 0 && !confirm('No cards added to this pack yet — finish anyway with a $0 total?')) return;
+  const btn = document.getElementById('finishPackBtn');
+  btn.disabled = true;
+  try {
+    const { total } = await priceForCollectionCards(cardsInSession);
+    session.totalValue = total;
+    session.finishedAt = new Date().toISOString();
+    saveCollectionData();
+    renderPackSessionPanel();
+    renderCollectionTab();
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function cancelActiveSession() {
+  const session = getActiveSession();
+  if (!session) return;
+  if (!confirm('Cancel this pack? Cards already added stay in your collection, just untagged from any pack.')) return;
+  collectionData.cards.forEach(c => { if (c.packSessionId === session.sessionId) c.packSessionId = null; });
+  collectionData.packSessions = collectionData.packSessions.filter(s => s.sessionId !== session.sessionId);
+  saveCollectionData();
+  renderPackSessionPanel();
+  renderCollectionTab();
+}
+
+function renderPackSessionPanel() {
+  const session = getActiveSession();
+  const inactiveEl = document.getElementById('packSessionInactive');
+  const activeEl = document.getElementById('packSessionActive');
+  if (!session) {
+    inactiveEl.classList.remove('hidden');
+    activeEl.classList.add('hidden');
+    return;
+  }
+  inactiveEl.classList.add('hidden');
+  activeEl.classList.remove('hidden');
+  const cardsInSession = collectionData.cards.filter(c => c.packSessionId === session.sessionId);
+  const cardCount = cardsInSession.reduce((sum, c) => sum + c.quantity, 0);
+  document.getElementById('activePackLabel').textContent = `${session.setName} — ${session.boosterLabel}`;
+  document.getElementById('activePackCardCount').textContent = cardCount;
+  document.getElementById('activePackTotal').textContent = 'calculating…';
+  priceForCollectionCards(cardsInSession).then(({ total }) => {
+    const stillActive = getActiveSession();
+    if (stillActive && stillActive.sessionId === session.sessionId) {
+      document.getElementById('activePackTotal').textContent = fmtMoney(total);
+    }
+  });
+}
+
+// Finished-pack averages by (setCode, boosterKind) — surfaced in the Compare
+// tab next to the theoretical EV for whichever sets/kinds have logged data.
+function getLoggedPackAverages(setCode) {
+  const finished = collectionData.packSessions.filter(s =>
+    s.setCode === setCode && s.finishedAt !== null && s.totalValue !== null);
+  const byKind = {};
+  finished.forEach(s => {
+    if (!byKind[s.boosterKind]) byKind[s.boosterKind] = [];
+    byKind[s.boosterKind].push(s.totalValue);
+  });
+  const result = {};
+  Object.keys(byKind).forEach(k => {
+    const vals = byKind[k];
+    result[k] = { avg: vals.reduce((a, b) => a + b, 0) / vals.length, count: vals.length };
+  });
+  return result;
+}
+
+// ---- collection view rendering ----
+async function renderCollectionTab() {
+  const statsEl = document.getElementById('collectionStats');
+  const tableEl = document.getElementById('collectionTableWrap');
+
+  const totalCards = collectionData.cards.reduce((sum, c) => sum + c.quantity, 0);
+  statsEl.innerHTML = `
+    <div class="stat-tile"><div class="stat-label">Total cards</div><div class="stat-value">${totalCards}</div></div>
+    <div class="stat-tile"><div class="stat-label">Unique entries</div><div class="stat-value">${collectionData.cards.length}</div></div>
+    <div class="stat-tile"><div class="stat-label">Collection value</div><div class="stat-value" id="collectionTotalValue">${collectionData.cards.length ? 'calculating…' : fmtMoney(0)}</div></div>
+  `;
+
+  renderPackSessionsList();
+
+  if (collectionData.cards.length === 0) {
+    tableEl.innerHTML = '<p class="hint">No cards yet — search and add one, or scan a photo.</p>';
+    return;
+  }
+  tableEl.innerHTML = '<p class="hint">Calculating current prices…</p>';
+
+  const { total, priced } = await priceForCollectionCards(collectionData.cards);
+  const totalValueEl = document.getElementById('collectionTotalValue');
+  if (totalValueEl) totalValueEl.textContent = fmtMoney(total);
+
+  tableEl.innerHTML = `
+    <table>
+      <thead>
+        <tr><th>Name</th><th>Set</th><th>Finish</th><th>Qty</th><th class="price-cell">Unit</th><th class="price-cell">Total</th><th></th></tr>
+      </thead>
+      <tbody>
+        ${priced.map(c => `
+          <tr>
+            <td>${escapeHtml(c.name)}</td>
+            <td>${setIconHtml(getSetMeta(c.setCode) && getSetMeta(c.setCode).icon_svg_uri, c.setName)}${c.setCode.toUpperCase()}</td>
+            <td><span class="finish-badge ${c.finish}">${c.finish}</span></td>
+            <td>
+              <div class="qty-controls">
+                <button class="qty-btn" data-entry="${c.entryId}" data-delta="-1">-</button>
+                ${c.quantity}
+                <button class="qty-btn" data-entry="${c.entryId}" data-delta="1">+</button>
+              </div>
+            </td>
+            <td class="price-cell">${fmtMoney(c.unitPrice)}</td>
+            <td class="price-cell">${fmtMoney(c.lineTotal)}</td>
+            <td><button class="remove-btn" data-entry="${c.entryId}">Remove</button></td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+
+  tableEl.querySelectorAll('.qty-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const entry = collectionData.cards.find(c => c.entryId === btn.dataset.entry);
+      if (entry) setCollectionEntryQuantity(entry.entryId, entry.quantity + Number(btn.dataset.delta));
+    });
+  });
+  tableEl.querySelectorAll('.remove-btn').forEach(btn => {
+    btn.addEventListener('click', () => removeCollectionEntry(btn.dataset.entry));
+  });
+}
+
+function renderPackSessionsList() {
+  const sessionsEl = document.getElementById('packSessionsWrap');
+  const finished = collectionData.packSessions
+    .filter(s => s.finishedAt !== null)
+    .sort((a, b) => b.finishedAt.localeCompare(a.finishedAt));
+  if (finished.length === 0) {
+    sessionsEl.innerHTML = '<p class="hint">No finished packs logged yet.</p>';
+    return;
+  }
+  sessionsEl.innerHTML = finished.map(s => `
+    <div class="pack-session-row">
+      <span>${setIconHtml(getSetMeta(s.setCode) && getSetMeta(s.setCode).icon_svg_uri, s.setName)}${escapeHtml(s.setName)} &mdash; ${escapeHtml(s.boosterLabel)}</span>
+      <span class="price-cell">${fmtMoney(s.totalValue)}</span>
+    </div>
+  `).join('');
+}
+
+// ---- export / import ----
+function exportCollection() {
+  const blob = new Blob([JSON.stringify(collectionData, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `mtg-collection-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function importCollectionFile(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const parsed = JSON.parse(reader.result);
+      if (!Array.isArray(parsed.cards) || !Array.isArray(parsed.packSessions)) {
+        throw new Error("That file doesn't look like a collection backup.");
+      }
+      const count = parsed.cards.length;
+      if (!confirm(`Import this backup? It has ${count} card entr${count === 1 ? 'y' : 'ies'} and will REPLACE your current collection in this browser.`)) return;
+      collectionData = { cards: parsed.cards, packSessions: parsed.packSessions };
+      saveCollectionData();
+      renderPackSessionPanel();
+      renderCollectionTab();
+      alert('Collection restored.');
+    } catch (e) {
+      alert('Could not import that file: ' + e.message);
+    }
+  };
+  reader.readAsText(file);
+}
+
 // ---------- wiring ----------
 document.addEventListener('DOMContentLoaded', () => {
   loadSets();
@@ -967,11 +1440,11 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
+  const TAB_PANELS = ['browseView', 'compareView', 'collectionView'];
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b === btn));
-      document.getElementById('browseView').classList.toggle('hidden', btn.dataset.tab !== 'browseView');
-      document.getElementById('compareView').classList.toggle('hidden', btn.dataset.tab !== 'compareView');
+      TAB_PANELS.forEach(id => document.getElementById(id).classList.toggle('hidden', id !== btn.dataset.tab));
     });
   });
 
@@ -997,4 +1470,33 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('cardModal').addEventListener('click', e => {
     if (e.target.id === 'cardModal') document.getElementById('cardModal').classList.add('hidden');
   });
+
+  // ---- my collection wiring ----
+  document.getElementById('collectionSearchBtn').addEventListener('click', () =>
+    runCollectionSearch(document.getElementById('collectionSearchBox').value));
+  document.getElementById('collectionSearchBox').addEventListener('keydown', e => {
+    if (e.key === 'Enter') runCollectionSearch(e.target.value);
+  });
+  document.getElementById('scanCameraInput').addEventListener('change', e => {
+    handleScanFile(e.target.files[0]);
+    e.target.value = '';
+  });
+  document.getElementById('scanUploadInput').addEventListener('change', e => {
+    handleScanFile(e.target.files[0]);
+    e.target.value = '';
+  });
+
+  document.getElementById('packSetFilterBox').addEventListener('input', e => renderPackSetList(e.target.value));
+  document.getElementById('startPackBtn').addEventListener('click', startPackSession);
+  document.getElementById('finishPackBtn').addEventListener('click', finishActiveSession);
+  document.getElementById('cancelPackBtn').addEventListener('click', cancelActiveSession);
+
+  document.getElementById('exportCollectionBtn').addEventListener('click', exportCollection);
+  document.getElementById('importCollectionInput').addEventListener('change', e => {
+    importCollectionFile(e.target.files[0]);
+    e.target.value = '';
+  });
+
+  renderPackSessionPanel();
+  renderCollectionTab();
 });

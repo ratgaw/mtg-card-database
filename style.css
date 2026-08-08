@@ -551,6 +551,12 @@ tbody tr:hover { outline: 1px solid var(--accent-dim); outline-offset: -1px; }
   font-size: 0.9rem;
 }
 
+.logged-avg-note {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-bottom: 0.5rem;
+}
+
 .chart-bar-row {
   display: flex;
   align-items: center;
@@ -650,6 +656,192 @@ tbody tr:hover { outline: 1px solid var(--accent-dim); outline-offset: -1px; }
 
 .purchase-links a:hover { text-decoration: underline; }
 
+/* ---------- my collection ---------- */
+#collectionLayout {
+  display: flex;
+  gap: 1.5rem;
+  align-items: flex-start;
+  padding: 1.5rem;
+}
+
+#collectionSidebar {
+  width: 300px;
+  flex-shrink: 0;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  position: sticky;
+  top: 1rem;
+}
+
+#collectionMain { flex: 1; min-width: 0; }
+
+.secondary-btn {
+  width: 100%;
+  padding: 0.45rem;
+  margin-top: 0.4rem;
+  background: transparent;
+  border: 1px solid var(--accent-dim);
+  color: var(--accent);
+  border-radius: 6px;
+  font-weight: 700;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.secondary-btn:hover { background: var(--accent); color: #14141a; }
+.secondary-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.hidden-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+}
+
+.scan-buttons {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.file-btn {
+  flex: 1;
+  display: block;
+  text-align: center;
+  padding: 0.45rem 0.3rem;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.file-btn:hover { border-color: var(--accent-dim); color: var(--accent); }
+
+#scanStatus { margin-top: 0.5rem; min-height: 1em; }
+
+#collectionSearchResults {
+  max-height: 260px;
+  overflow-y: auto;
+  margin-top: 0.5rem;
+}
+
+.search-result-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.2rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.78rem;
+}
+
+.search-result-row:last-child { border-bottom: none; }
+.search-result-row .sr-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-result-row .sr-price { color: var(--text-dim); white-space: nowrap; }
+
+.add-btn {
+  padding: 0.2rem 0.5rem;
+  background: var(--accent);
+  color: #14141a;
+  border: none;
+  border-radius: 4px;
+  font-weight: 700;
+  font-size: 0.75rem;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.add-btn:hover { background: var(--accent-dim); }
+
+.pack-set-list { max-height: 140px; }
+
+/* This list uses radios (single pick, native click-to-select) rather than the
+   drag-select checkbox lists, so restore normal pointer events here — the
+   general .set-list rule disables them on labels/checkboxes so drag-select's
+   own mousedown/mouseover handlers can own every click uniformly instead. */
+.pack-set-list .set-item label,
+.pack-set-list .set-item input { pointer-events: auto; }
+
+#packSessionActive p { margin: 0.3rem 0; }
+#activePackTotal, #activePackCardCount { color: var(--accent); font-weight: 700; }
+
+.stat-row {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.stat-tile {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.8rem 1.2rem;
+  min-width: 140px;
+}
+
+.stat-tile .stat-label {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-bottom: 0.2rem;
+}
+
+.stat-tile .stat-value { font-size: 1.4rem; font-weight: 700; color: var(--accent); }
+
+.section-heading {
+  font-size: 0.95rem;
+  margin: 1.5rem 0 0.6rem 0;
+  color: var(--text-dim);
+}
+
+.qty-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.qty-btn {
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.qty-btn:hover { border-color: var(--accent-dim); color: var(--accent); }
+
+.remove-btn {
+  color: var(--danger);
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.remove-btn:hover { text-decoration: underline; }
+
+.pack-session-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.9rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+
+.pack-session-row:last-child { border-bottom: none; }
+
 @media (max-width: 800px) {
   main { flex-direction: column; }
   #filters { width: 100%; position: static; }
@@ -657,4 +849,6 @@ tbody tr:hover { outline: 1px solid var(--accent-dim); outline-offset: -1px; }
   #compareFilters { width: 100%; position: static; }
   .chart-bar-label { width: 80px; }
   .card-modal-image { flex: 0 0 auto; max-width: 200px; margin: 0 auto; }
+  #collectionLayout { flex-direction: column; padding: 1rem; }
+  #collectionSidebar { width: 100%; position: static; }
 }

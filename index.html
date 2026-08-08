@@ -13,6 +13,7 @@
   <nav class="tabs">
     <button class="tab-btn active" data-tab="browseView">Card Browser</button>
     <button class="tab-btn" data-tab="compareView">Compare Booster Value</button>
+    <button class="tab-btn" data-tab="collectionView">My Collection</button>
   </nav>
 </header>
 
@@ -101,6 +102,64 @@
       <div id="compareSummary" class="hint">Select sets on the left and click Compare.</div>
       <div id="compareChart"></div>
       <div id="compareTableWrap"></div>
+    </div>
+  </div>
+</section>
+
+<section id="collectionView" class="tab-panel hidden">
+  <div id="collectionLayout">
+    <aside id="collectionSidebar">
+      <div class="filter-group">
+        <label>Add a card</label>
+        <input type="text" id="collectionSearchBox" placeholder="Card name...">
+        <button id="collectionSearchBtn" class="secondary-btn">Search</button>
+        <div class="scan-buttons">
+          <label class="file-btn">Take photo
+            <input type="file" accept="image/*" capture="environment" id="scanCameraInput" class="hidden-file-input">
+          </label>
+          <label class="file-btn">Upload photo
+            <input type="file" accept="image/*" id="scanUploadInput" class="hidden-file-input">
+          </label>
+        </div>
+        <div id="scanStatus" class="hint"></div>
+        <div id="collectionSearchResults"></div>
+      </div>
+
+      <div class="filter-group" id="packSessionPanel">
+        <label>Log a pack <span class="hint">(tracks your real pull value)</span></label>
+        <div id="packSessionInactive">
+          <input type="text" id="packSetFilterBox" placeholder="Filter set list...">
+          <div id="packSetList" class="set-list pack-set-list">Loading sets&hellip;</div>
+          <select id="packBoosterKindSelect">
+            <option value="set">Set / Play Booster</option>
+            <option value="collector">Collector Booster</option>
+            <option value="draft">Draft Booster</option>
+          </select>
+          <button id="startPackBtn" class="secondary-btn">Start pack</button>
+        </div>
+        <div id="packSessionActive" class="hidden">
+          <p class="hint">Logging: <strong id="activePackLabel"></strong></p>
+          <p class="hint"><span id="activePackCardCount">0</span> card(s) &middot; running total <span id="activePackTotal">$0.00</span></p>
+          <button id="finishPackBtn" class="secondary-btn">Finish pack</button>
+          <button id="cancelPackBtn" class="link-btn">Cancel</button>
+        </div>
+      </div>
+
+      <div class="filter-group">
+        <label>Backup</label>
+        <button id="exportCollectionBtn" class="secondary-btn">Download backup (JSON)</button>
+        <label class="file-btn">Restore from backup
+          <input type="file" accept="application/json" id="importCollectionInput" class="hidden-file-input">
+        </label>
+        <p class="hint">Your collection lives only in this browser (no account, no server) &mdash; back it up if you want to move it or keep it safe.</p>
+      </div>
+    </aside>
+
+    <div id="collectionMain">
+      <div id="collectionStats" class="stat-row"></div>
+      <div id="collectionTableWrap"></div>
+      <h3 class="section-heading">Logged packs</h3>
+      <div id="packSessionsWrap"></div>
     </div>
   </div>
 </section>
