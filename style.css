@@ -470,6 +470,13 @@ tbody tr:hover { outline: 1px solid var(--accent-dim); outline-offset: -1px; }
   white-space: nowrap;
 }
 
+.card-tile-treatments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+  margin-bottom: 0.3rem;
+}
+
 .card-tile-meta {
   display: flex;
   align-items: center;
@@ -665,7 +672,7 @@ tbody tr:hover { outline: 1px solid var(--accent-dim); outline-offset: -1px; }
 }
 
 #collectionSidebar {
-  width: 300px;
+  width: 400px;
   flex-shrink: 0;
   background: var(--panel);
   border: 1px solid var(--border);
@@ -725,26 +732,68 @@ tbody tr:hover { outline: 1px solid var(--accent-dim); outline-offset: -1px; }
 #scanStatus { margin-top: 0.5rem; min-height: 1em; }
 
 #collectionSearchResults {
-  max-height: 260px;
+  max-height: 420px;
   overflow-y: auto;
+  overflow-x: hidden;
   margin-top: 0.5rem;
 }
 
 .search-result-row {
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.35rem 0.2rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.5rem 0.2rem;
   border-bottom: 1px solid var(--border);
   font-size: 0.78rem;
 }
 
 .search-result-row:last-child { border-bottom: none; }
-.search-result-row .sr-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.search-result-row .sr-price { color: var(--text-dim); white-space: nowrap; }
+
+.sr-main { flex: 1; min-width: 0; }
+
+.sr-name {
+  font-weight: 600;
+  white-space: normal;
+  overflow-wrap: break-word;
+  margin-bottom: 0.3rem;
+  line-height: 1.3;
+}
+
+.sr-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--text-dim);
+  font-size: 0.7rem;
+}
+
+.sr-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+
+.sr-price { color: var(--text-dim); white-space: nowrap; font-size: 0.78rem; font-weight: 600; }
+
+.treatment-badge {
+  display: inline-block;
+  padding: 0.05rem 0.4rem;
+  border-radius: 8px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  border: 1px solid var(--accent-dim);
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.treatment-badge.base { border-color: var(--border); color: var(--text-dim); }
 
 .add-btn {
-  padding: 0.2rem 0.5rem;
+  padding: 0.25rem 0.6rem;
   background: var(--accent);
   color: #14141a;
   border: none;
@@ -753,6 +802,7 @@ tbody tr:hover { outline: 1px solid var(--accent-dim); outline-offset: -1px; }
   font-size: 0.75rem;
   cursor: pointer;
   flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .add-btn:hover { background: var(--accent-dim); }

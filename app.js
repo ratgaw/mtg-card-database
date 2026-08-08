@@ -241,16 +241,57 @@ function wireSelectAllClear(selectAllBtnId, clearBtnId, containerId, checkboxCla
 // ---------- row expansion + classification ----------
 const ALT_ART_FRAME_EFFECTS = new Set(['showcase', 'extendedart', 'inverted']);
 
+// Specific, human-readable treatment labels (shown as badges) rather than one
+// generic "alt art" flag — printings that look identical in a truncated name
+// (e.g. several showcase/borderless/surge-foil variants of the same card)
+// need to be tellable apart at a glance. `frame_effects` covers most border
+// treatments; foil-specific treatments (surge foil, galaxy foil, etc.) live
+// in `promo_types` instead.
+const FRAME_EFFECT_LABELS = {
+  showcase: 'Showcase',
+  extendedart: 'Extended Art',
+  inverted: 'Inverted',
+};
+const PROMO_TYPE_LABELS = {
+  surgefoil: 'Surge Foil',
+  galaxyfoil: 'Galaxy Foil',
+  rainbowfoil: 'Rainbow Foil',
+  halofoil: 'Halo Foil',
+  confettifoil: 'Confetti Foil',
+  doubleexposure: 'Double Exposure',
+  gilded: 'Gilded',
+  serialized: 'Serialized',
+  neonink: 'Neon Ink',
+  texturedfoil: 'Textured Foil',
+  textured: 'Textured Foil',
+  oilslick: 'Oil Slick Foil',
+  stepandcompleat: 'Step-and-Compleat Foil',
+};
+
 function classifyPrint(card) {
   const frameEffects = card.frame_effects || [];
+  const promoTypes = card.promo_types || [];
+
+  // Border/frame treatments apply to the printing as a whole, regardless of
+  // which finish a given row is. Foil treatments (surge foil, galaxy foil,
+  // etc.) only make sense on the foil/etched row of a card — a nonfoil row
+  // of the same printing shouldn't be badged "Surge Foil".
+  const baseTreatments = [];
+  frameEffects.forEach(fe => { if (FRAME_EFFECT_LABELS[fe]) baseTreatments.push(FRAME_EFFECT_LABELS[fe]); });
+  if (card.full_art) baseTreatments.push('Full Art');
+  if (card.border_color === 'borderless' && !frameEffects.includes('showcase')) baseTreatments.push('Borderless');
+
+  const foilTreatments = [];
+  promoTypes.forEach(pt => { if (PROMO_TYPE_LABELS[pt] && !foilTreatments.includes(PROMO_TYPE_LABELS[pt])) foilTreatments.push(PROMO_TYPE_LABELS[pt]); });
+
   const isAltArt = frameEffects.some(fe => ALT_ART_FRAME_EFFECTS.has(fe))
     || card.full_art === true
     || card.border_color === 'borderless';
-  return { isAltArt };
+  return { isAltArt, baseTreatments, foilTreatments };
 }
 
 function expandPrintToRows(card) {
-  const { isAltArt } = classifyPrint(card);
+  const { isAltArt, baseTreatments, foilTreatments } = classifyPrint(card);
   const finishes = card.finishes || [];
 
   const allPrices = {};
@@ -273,6 +314,7 @@ function expandPrintToRows(card) {
   const rows = [];
   for (const finish of finishes) {
     const isBase = finish === 'nonfoil' && !isAltArt && !card.promo && !card.variation;
+    const treatments = finish === 'nonfoil' ? baseTreatments : baseTreatments.concat(foilTreatments);
     rows.push({
       id: card.id,
       name: card.name,
@@ -283,6 +325,7 @@ function expandPrintToRows(card) {
       finish,
       isAltArt,
       isBase,
+      treatments,
       price: allPrices[finish] !== undefined ? allPrices[finish] : null,
       allPrices,
       imageUri,
@@ -505,7 +548,7 @@ function renderTable(rows) {
             <td>${r.collectorNumber}</td>
             <td>${r.rarity}</td>
             <td><span class="finish-badge ${r.finish}">${r.finish}</span></td>
-            <td>${r.isAltArt ? 'alt-art ' : ''}${r.isBase ? 'base' : ''}</td>
+            <td>${r.treatments.map(t => `<span class="treatment-badge">${escapeHtml(t)}</span>`).join(' ')}${r.isBase ? '<span class="treatment-badge base">Base</span>' : ''}</td>
             <td class="price-cell">${fmtMoney(r.price)}</td>
           </tr>
         `).join('')}
@@ -525,6 +568,7 @@ function renderGrid(rows) {
             : `<div class="card-tile-noart">${escapeHtml(r.name)}</div>`}
           <div class="card-tile-info">
             <div class="card-tile-name" title="${escapeHtml(r.name)}">${escapeHtml(r.name)}</div>
+            ${r.treatments.length > 0 ? `<div class="card-tile-treatments">${r.treatments.map(t => `<span class="treatment-badge">${escapeHtml(t)}</span>`).join('')}</div>` : ''}
             <div class="card-tile-meta">
               <span class="finish-badge ${r.finish}">${r.finish}</span>
               <span class="card-tile-price">${fmtMoney(r.price)}</span>
@@ -703,6 +747,7 @@ async function openCardModal(row) {
       <div class="card-modal-info">
         <h3>${escapeHtml(row.name)}</h3>
         <p class="hint">${setIconHtml(getSetMeta(row.setCode) && getSetMeta(row.setCode).icon_svg_uri, row.setName)}${escapeHtml(row.setName)} (${row.setCode.toUpperCase()}) &middot; #${escapeHtml(String(row.collectorNumber))} &middot; ${escapeHtml(row.rarity)}</p>
+        ${row.treatments.length > 0 ? `<p>${row.treatments.map(t => `<span class="treatment-badge">${escapeHtml(t)}</span>`).join(' ')}</p>` : ''}
         <h4>Pricing <span class="hint">(market / buy price)</span></h4>
         ${priceRowsHtml}
         ${purchaseLinks.length > 0 ? `<div class="purchase-links">${purchaseLinks.join('')}</div>` : ''}
@@ -1108,9 +1153,18 @@ function renderCollectionSearchResults() {
   }
   resultsEl.innerHTML = collectionSearchRows.map((r, i) => `
     <div class="search-result-row">
-      <span class="sr-name">${escapeHtml(r.name)} <span class="hint">${r.setCode.toUpperCase()} &middot; ${r.finish}</span></span>
-      <span class="sr-price">${fmtMoney(r.price)}</span>
-      <button class="add-btn" data-idx="${i}">+ Add</button>
+      <div class="sr-main">
+        <div class="sr-name">${escapeHtml(r.name)}</div>
+        <div class="sr-meta">
+          ${setIconHtml(getSetMeta(r.setCode) && getSetMeta(r.setCode).icon_svg_uri, r.setName)}${r.setCode.toUpperCase()} &middot; #${escapeHtml(String(r.collectorNumber))} &middot; ${escapeHtml(r.rarity)}
+          <span class="finish-badge ${r.finish}">${r.finish}</span>
+          ${r.treatments.map(t => `<span class="treatment-badge">${escapeHtml(t)}</span>`).join('')}
+        </div>
+      </div>
+      <div class="sr-side">
+        <span class="sr-price">${fmtMoney(r.price)}</span>
+        <button class="add-btn" data-idx="${i}">+ Add</button>
+      </div>
     </div>
   `).join('');
   resultsEl.querySelectorAll('.add-btn').forEach(btn => {
