@@ -26,6 +26,22 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+function treatmentBadgesHtml(treatments) {
+  return (treatments || []).map(t => `<span class="treatment-badge treatment-${t.kind}">${escapeHtml(t.label)}</span>`).join('');
+}
+
+// Red/green change-since-logging indicator. null means "not computable"
+// (no stored baseline, e.g. an entry added before this feature existed) —
+// shown as a plain dash rather than a fabricated zero.
+function priceDeltaHtml(delta) {
+  if (delta === null || delta === undefined || isNaN(delta)) return '<span class="price-delta neutral">—</span>';
+  if (Math.abs(delta) < 0.005) return '<span class="price-delta neutral">$0.00</span>';
+  const up = delta > 0;
+  const arrow = up ? '▲' : '▼';
+  const cls = up ? 'up' : 'down';
+  return `<span class="price-delta ${cls}">${arrow} ${up ? '+' : '-'}$${Math.abs(delta).toFixed(2)}</span>`;
+}
+
 async function mapWithConcurrency(items, limit, fn) {
   const results = new Array(items.length);
   let idx = 0;
@@ -275,14 +291,21 @@ function classifyPrint(card) {
   // Border/frame treatments apply to the printing as a whole, regardless of
   // which finish a given row is. Foil treatments (surge foil, galaxy foil,
   // etc.) only make sense on the foil/etched row of a card — a nonfoil row
-  // of the same printing shouldn't be badged "Surge Foil".
+  // of the same printing shouldn't be badged "Surge Foil". Tagged with a
+  // `kind` so foil treatments can be styled distinctly from frame/border
+  // treatments — "Surge Foil" is a different *kind* of thing than "Showcase",
+  // not just another item in the same flat list.
   const baseTreatments = [];
-  frameEffects.forEach(fe => { if (FRAME_EFFECT_LABELS[fe]) baseTreatments.push(FRAME_EFFECT_LABELS[fe]); });
-  if (card.full_art) baseTreatments.push('Full Art');
-  if (card.border_color === 'borderless' && !frameEffects.includes('showcase')) baseTreatments.push('Borderless');
+  frameEffects.forEach(fe => { if (FRAME_EFFECT_LABELS[fe]) baseTreatments.push({ label: FRAME_EFFECT_LABELS[fe], kind: 'frame' }); });
+  if (card.full_art) baseTreatments.push({ label: 'Full Art', kind: 'frame' });
+  if (card.border_color === 'borderless' && !frameEffects.includes('showcase')) baseTreatments.push({ label: 'Borderless', kind: 'frame' });
 
   const foilTreatments = [];
-  promoTypes.forEach(pt => { if (PROMO_TYPE_LABELS[pt] && !foilTreatments.includes(PROMO_TYPE_LABELS[pt])) foilTreatments.push(PROMO_TYPE_LABELS[pt]); });
+  const seenFoilLabels = new Set();
+  promoTypes.forEach(pt => {
+    const label = PROMO_TYPE_LABELS[pt];
+    if (label && !seenFoilLabels.has(label)) { seenFoilLabels.add(label); foilTreatments.push({ label, kind: 'foil' }); }
+  });
 
   const isAltArt = frameEffects.some(fe => ALT_ART_FRAME_EFFECTS.has(fe))
     || card.full_art === true
@@ -548,7 +571,7 @@ function renderTable(rows) {
             <td>${r.collectorNumber}</td>
             <td>${r.rarity}</td>
             <td><span class="finish-badge ${r.finish}">${r.finish}</span></td>
-            <td>${r.treatments.map(t => `<span class="treatment-badge">${escapeHtml(t)}</span>`).join(' ')}${r.isBase ? '<span class="treatment-badge base">Base</span>' : ''}</td>
+            <td>${treatmentBadgesHtml(r.treatments)}${r.isBase ? '<span class="treatment-badge base">Base</span>' : ''}</td>
             <td class="price-cell">${fmtMoney(r.price)}</td>
           </tr>
         `).join('')}
@@ -568,7 +591,7 @@ function renderGrid(rows) {
             : `<div class="card-tile-noart">${escapeHtml(r.name)}</div>`}
           <div class="card-tile-info">
             <div class="card-tile-name" title="${escapeHtml(r.name)}">${escapeHtml(r.name)}</div>
-            ${r.treatments.length > 0 ? `<div class="card-tile-treatments">${r.treatments.map(t => `<span class="treatment-badge">${escapeHtml(t)}</span>`).join('')}</div>` : ''}
+            ${r.treatments.length > 0 ? `<div class="card-tile-treatments">${treatmentBadgesHtml(r.treatments)}</div>` : ''}
             <div class="card-tile-meta">
               <span class="finish-badge ${r.finish}">${r.finish}</span>
               <span class="card-tile-price">${fmtMoney(r.price)}</span>
@@ -747,7 +770,7 @@ async function openCardModal(row) {
       <div class="card-modal-info">
         <h3>${escapeHtml(row.name)}</h3>
         <p class="hint">${setIconHtml(getSetMeta(row.setCode) && getSetMeta(row.setCode).icon_svg_uri, row.setName)}${escapeHtml(row.setName)} (${row.setCode.toUpperCase()}) &middot; #${escapeHtml(String(row.collectorNumber))} &middot; ${escapeHtml(row.rarity)}</p>
-        ${row.treatments.length > 0 ? `<p>${row.treatments.map(t => `<span class="treatment-badge">${escapeHtml(t)}</span>`).join(' ')}</p>` : ''}
+        ${row.treatments.length > 0 ? `<p>${treatmentBadgesHtml(row.treatments)}</p>` : ''}
         <h4>Pricing <span class="hint">(market / buy price)</span></h4>
         ${priceRowsHtml}
         ${purchaseLinks.length > 0 ? `<div class="purchase-links">${purchaseLinks.join('')}</div>` : ''}
@@ -1061,6 +1084,7 @@ function addCardToCollection(row, quantity) {
       quantity,
       addedAt: new Date().toISOString(),
       packSessionId: sessionId,
+      priceAtAdd: row.price !== undefined ? row.price : null,
     });
   }
   saveCollectionData();
@@ -1119,7 +1143,14 @@ async function priceForCollectionCards(cards) {
     }
     const lineTotal = unitPrice !== null ? unitPrice * c.quantity : null;
     if (lineTotal !== null) total += lineTotal;
-    return Object.assign({}, c, { unitPrice, lineTotal });
+    // Change since logging: only computable when both ends of the
+    // comparison actually exist (older entries added before this feature
+    // won't have a stored priceAtAdd — show no indicator rather than
+    // fabricate a baseline).
+    const priceDelta = (unitPrice !== null && c.priceAtAdd !== null && c.priceAtAdd !== undefined)
+      ? unitPrice - c.priceAtAdd
+      : null;
+    return Object.assign({}, c, { unitPrice, lineTotal, priceDelta });
   });
   return { total, priced };
 }
@@ -1158,7 +1189,7 @@ function renderCollectionSearchResults() {
         <div class="sr-meta">
           ${setIconHtml(getSetMeta(r.setCode) && getSetMeta(r.setCode).icon_svg_uri, r.setName)}${r.setCode.toUpperCase()} &middot; #${escapeHtml(String(r.collectorNumber))} &middot; ${escapeHtml(r.rarity)}
           <span class="finish-badge ${r.finish}">${r.finish}</span>
-          ${r.treatments.map(t => `<span class="treatment-badge">${escapeHtml(t)}</span>`).join('')}
+          ${treatmentBadgesHtml(r.treatments)}
         </div>
       </div>
       <div class="sr-side">
@@ -1377,7 +1408,7 @@ async function renderCollectionTab() {
   tableEl.innerHTML = `
     <table>
       <thead>
-        <tr><th>Name</th><th>Set</th><th>Finish</th><th>Qty</th><th class="price-cell">Unit</th><th class="price-cell">Total</th><th></th></tr>
+        <tr><th>Name</th><th>Set</th><th>Finish</th><th>Qty</th><th class="price-cell">Unit</th><th class="price-cell">Change</th><th class="price-cell">Total</th><th></th></tr>
       </thead>
       <tbody>
         ${priced.map(c => `
@@ -1393,6 +1424,7 @@ async function renderCollectionTab() {
               </div>
             </td>
             <td class="price-cell">${fmtMoney(c.unitPrice)}</td>
+            <td class="price-cell">${priceDeltaHtml(c.priceDelta)}</td>
             <td class="price-cell">${fmtMoney(c.lineTotal)}</td>
             <td><button class="remove-btn" data-entry="${c.entryId}">Remove</button></td>
           </tr>
@@ -1412,6 +1444,8 @@ async function renderCollectionTab() {
   });
 }
 
+let expandedPackSessionId = null;
+
 function renderPackSessionsList() {
   const sessionsEl = document.getElementById('packSessionsWrap');
   const finished = collectionData.packSessions
@@ -1422,11 +1456,71 @@ function renderPackSessionsList() {
     return;
   }
   sessionsEl.innerHTML = finished.map(s => `
-    <div class="pack-session-row">
-      <span>${setIconHtml(getSetMeta(s.setCode) && getSetMeta(s.setCode).icon_svg_uri, s.setName)}${escapeHtml(s.setName)} &mdash; ${escapeHtml(s.boosterLabel)}</span>
-      <span class="price-cell">${fmtMoney(s.totalValue)}</span>
+    <div class="pack-session-item">
+      <div class="pack-session-row" data-session="${s.sessionId}">
+        <span>${setIconHtml(getSetMeta(s.setCode) && getSetMeta(s.setCode).icon_svg_uri, s.setName)}${escapeHtml(s.setName)} &mdash; ${escapeHtml(s.boosterLabel)} <span class="hint">${new Date(s.finishedAt).toLocaleDateString()}</span></span>
+        <span class="price-cell">${fmtMoney(s.totalValue)}</span>
+      </div>
+      <div class="pack-session-cards hidden" id="packcards-${s.sessionId}"></div>
     </div>
   `).join('');
+
+  sessionsEl.querySelectorAll('.pack-session-row').forEach(row => {
+    row.addEventListener('click', () => togglePackSessionExpand(row.dataset.session));
+  });
+
+  if (expandedPackSessionId && finished.some(s => s.sessionId === expandedPackSessionId)) {
+    const el = document.getElementById(`packcards-${expandedPackSessionId}`);
+    if (el) el.classList.remove('hidden');
+    renderPackSessionCards(expandedPackSessionId);
+  } else {
+    expandedPackSessionId = null;
+  }
+}
+
+async function togglePackSessionExpand(sessionId) {
+  const el = document.getElementById(`packcards-${sessionId}`);
+  if (expandedPackSessionId === sessionId) {
+    expandedPackSessionId = null;
+    if (el) el.classList.add('hidden');
+    return;
+  }
+  expandedPackSessionId = sessionId;
+  document.querySelectorAll('.pack-session-cards').forEach(node => node.classList.add('hidden'));
+  if (el) el.classList.remove('hidden');
+  await renderPackSessionCards(sessionId);
+}
+
+async function renderPackSessionCards(sessionId) {
+  const el = document.getElementById(`packcards-${sessionId}`);
+  if (!el) return;
+  const cards = collectionData.cards.filter(c => c.packSessionId === sessionId);
+  if (cards.length === 0) {
+    el.innerHTML = '<p class="hint">No cards recorded for this pack.</p>';
+    return;
+  }
+  el.innerHTML = '<p class="hint">Loading…</p>';
+  const { priced } = await priceForCollectionCards(cards);
+  // A session could have been collapsed (or a different one expanded) while
+  // this price lookup was in flight — don't overwrite whatever's there now.
+  if (expandedPackSessionId !== sessionId) return;
+  el.innerHTML = `
+    <table class="pack-cards-table">
+      <thead><tr><th>Card</th><th>Finish</th><th>Qty</th><th class="price-cell">Then</th><th class="price-cell">Now</th><th class="price-cell">Change</th></tr></thead>
+      <tbody>
+        ${priced.map(c => `
+          <tr>
+            <td>${escapeHtml(c.name)}</td>
+            <td><span class="finish-badge ${c.finish}">${c.finish}</span></td>
+            <td>${c.quantity}</td>
+            <td class="price-cell">${fmtMoney(c.priceAtAdd)}</td>
+            <td class="price-cell">${fmtMoney(c.unitPrice)}</td>
+            <td class="price-cell">${priceDeltaHtml(c.priceDelta)}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
 }
 
 // ---- export / import ----

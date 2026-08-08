@@ -7,11 +7,14 @@
   --accent: #d4a24e;
   --accent-dim: #8a6a2e;
   --danger: #c85a5a;
+  --success: #0ca30c;
   --row-alt: #1b1e26;
   /* categorical series (booster kinds) — dataviz default palette, dark steps */
   --series-set: #3987e5;
   --series-collector: #d95926;
   --series-draft: #199e70;
+  --foil: #9085e9;
+  --foil-dim: #4a3aa7;
 }
 
 @media (prefers-color-scheme: light) {
@@ -24,10 +27,13 @@
     --accent: #9b6b1f;
     --accent-dim: #c99a49;
     --danger: #a83c3c;
+    --success: #006300;
     --row-alt: #f0eee7;
     --series-set: #2a78d6;
     --series-collector: #eb6834;
     --series-draft: #1baf7a;
+    --foil: #4a3aa7;
+    --foil-dim: #9085e9;
   }
 }
 
@@ -785,12 +791,25 @@ tbody tr:hover { outline: 1px solid var(--accent-dim); outline-offset: -1px; }
   border-radius: 8px;
   font-size: 0.65rem;
   font-weight: 600;
-  border: 1px solid var(--accent-dim);
-  color: var(--accent);
   white-space: nowrap;
 }
 
-.treatment-badge.base { border-color: var(--border); color: var(--text-dim); }
+/* frame/border treatments (Showcase, Extended Art, Full Art, Borderless) */
+.treatment-badge.treatment-frame { border: 1px solid var(--accent-dim); color: var(--accent); }
+
+/* foil treatments (Surge Foil, Galaxy Foil, etc.) are a categorically
+   different kind of thing from a frame/border treatment, so they get their
+   own color rather than blending into the same badge color as everything
+   else — a violet/shimmer tone distinct from the amber accent and from the
+   etched finish badge's blue. */
+.treatment-badge.treatment-foil { border: 1px solid var(--foil-dim); color: var(--foil); }
+
+.treatment-badge.base { border: 1px solid var(--border); color: var(--text-dim); }
+
+.price-delta { font-size: 0.78rem; font-weight: 700; white-space: nowrap; }
+.price-delta.up { color: var(--success); }
+.price-delta.down { color: var(--danger); }
+.price-delta.neutral { color: var(--text-dim); font-weight: 400; }
 
 .add-btn {
   padding: 0.25rem 0.6rem;
@@ -881,16 +900,39 @@ tbody tr:hover { outline: 1px solid var(--accent-dim); outline-offset: -1px; }
 
 .remove-btn:hover { text-decoration: underline; }
 
+.pack-session-item { border-bottom: 1px solid var(--border); }
+.pack-session-item:last-child { border-bottom: none; }
+
 .pack-session-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0.5rem 0.9rem;
-  border-bottom: 1px solid var(--border);
   font-size: 0.85rem;
+  cursor: pointer;
 }
 
-.pack-session-row:last-child { border-bottom: none; }
+.pack-session-row:hover { background: var(--row-alt); }
+
+.pack-session-cards {
+  padding: 0 0.9rem 0.8rem 0.9rem;
+  background: var(--row-alt);
+}
+
+.pack-cards-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+
+.pack-cards-table th, .pack-cards-table td {
+  padding: 0.3rem 0.5rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.pack-cards-table th.price-cell, .pack-cards-table td.price-cell { text-align: right; }
+.pack-cards-table tbody tr:last-child td { border-bottom: none; }
 
 @media (max-width: 800px) {
   main { flex-direction: column; }
